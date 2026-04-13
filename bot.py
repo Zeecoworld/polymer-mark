@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Polymarket AI Paper Trading Bot
-Strategy : Replicate (Llama 3 70B) NLU + Spread Arbitrage + Risk Management
-Mode     : PAPER TRADE ONLY  -  no real money moves
-Deploy   : Render.com (free tier)
-"""
 
 import asyncio
 import json
@@ -12,17 +5,18 @@ import random
 import httpx
 import os
 import threading
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 from flask import Flask, send_file, jsonify
 
+
 from dotenv import load_dotenv
 
 load_dotenv()
-# ==============================================================================
-#  CONFIG  -  use environment variables on Render, fallback for local dev
-# ==============================================================================
+
+
 REPLICATE_API_KEY  = os.getenv("REPLICATE_API_KEY", "YOUR_r8_TOKEN_HERE")
 REPLICATE_MODEL    = "meta/meta-llama-3-70b-instruct"
 REPLICATE_API_URL  = "https://api.replicate.com/v1/models/{model}/predictions"
@@ -30,15 +24,117 @@ REPLICATE_API_URL  = "https://api.replicate.com/v1/models/{model}/predictions"
 PAPER_BALANCE_USDC  = 1000.0
 GAMMA_API           = "https://gamma-api.polymarket.com"
 SCAN_INTERVAL       = 30
-MAX_POSITION_PCT    = 0.03     # max 3% of balance per trade
-MIN_EDGE_PCT        = 0.06     # minimum 6 cents edge
-MAX_OPEN_POSITIONS  = 5
+MAX_POSITION_PCT    = 0.04
+MIN_EDGE_PCT        = 0.05
+MAX_OPEN_POSITIONS  = 6
 LOG_FILE            = "paper_trades.json"
 
+# Only trade these categories (sports + crypto perform best)
+ALLOWED_CATEGORIES  = {"sports", "crypto", "politics", "finance"}
 
 # ==============================================================================
-#  FLASK  -  serves dashboard + JSON at your Render URL
+#  FREE RSS NEWS FEEDS  -  no API key, no limits
 # ==============================================================================
+RSS_FEEDS = {
+    "sports": [
+        "https://www.espn.com/espn/rss/news",
+        "https://feeds.bbci.co.uk/sport/rss.xml",
+        "https://www.skysports.com/rss/12040",
+        "https://news.google.com/rss/search?q=sports&hl=en",
+    ],
+    "crypto": [
+        "https://www.coindesk.com/arc/outboundfeeds/rss/",
+        "https://cointelegraph.com/rss",
+        "https://news.google.com/rss/search?q=bitcoin+crypto&hl=en",
+    ],
+    "general": [
+        "https://feeds.reuters.com/reuters/topNews",
+        "https://feeds.bbci.co.uk/news/rss.xml",
+        "https://news.google.com/rss/headlines?hl=en",
+    ],
+}
+
+# Cache news so we don't hammer RSS feeds every scan
+_news_cache: dict = {}
+_news_cache_time: dict = {}
+NEWS_CACHE_TTL = 300  # refresh every 5 minutes
+
+
+async def fetch_rss(url: str) -> list[str]:
+    """Fetch and parse an RSS feed, returning list of headlines."""
+    try:
+        async with httpx.AsyncClient(timeout=8, follow_redirects=True) as http:
+            r = await http.get(url, headers={"User-Agent": "Mozilla/5.0"})
+            if r.status_code != 200:
+                return []
+            root = ET.fromstring(r.text)
+            headlines = []
+            # Handle both RSS and Atom formats
+            for item in root.iter("item"):
+                title = item.find("title")
+                if title is not None and title.text:
+                    headlines.append(title.text.strip())
+            for entry in root.iter("{http://www.w3.org/2005/Atom}entry"):
+                title = entry.find("{http://www.w3.org/2005/Atom}title")
+                if title is not None and title.text:
+                    headlines.append(title.text.strip())
+            return headlines[:10]
+    except Exception:
+        return []
+
+
+async def get_news_for_market(market_question: str, category: str) -> str:
+    now = datetime.now(timezone.utc).timestamp()
+    cat = category.lower()
+
+    # Pick which feeds to use based on category
+    if "sport" in cat or any(w in market_question.lower() for w in
+       ["nba", "nfl", "fifa", "epl", "soccer", "football", "basketball",
+        "tennis", "golf", "baseball", "nhl", "mls", "ufc", "boxing"]):
+        feed_keys = ["sports", "general"]
+    elif any(w in market_question.lower() for w in
+             ["bitcoin", "btc", "eth", "crypto", "solana", "coinbase"]):
+        feed_keys = ["crypto", "general"]
+    else:
+        feed_keys = ["general", "sports", "crypto"]
+
+    # Collect all headlines (from cache or fresh fetch)
+    all_headlines = []
+    for key in feed_keys:
+        for url in RSS_FEEDS.get(key, []):
+            cache_key = url
+            # Use cache if fresh
+            if (cache_key in _news_cache and
+                    now - _news_cache_time.get(cache_key, 0) < NEWS_CACHE_TTL):
+                all_headlines.extend(_news_cache[cache_key])
+            else:
+                headlines = await fetch_rss(url)
+                _news_cache[cache_key] = headlines
+                _news_cache_time[cache_key] = now
+                all_headlines.extend(headlines)
+
+    if not all_headlines:
+        return "No recent news found."
+
+    # Score headlines by relevance to the market question
+    keywords = [w.lower() for w in market_question.replace("?","").split()
+                if len(w) > 3]
+
+    def relevance(h: str) -> int:
+        h_lower = h.lower()
+        return sum(1 for kw in keywords if kw in h_lower)
+
+    scored = sorted(set(all_headlines), key=relevance, reverse=True)
+    top    = [h for h in scored if relevance(h) > 0][:5]
+
+    if not top:
+        # No keyword matches — return top general headlines
+        top = scored[:3]
+
+    return " | ".join(top) if top else "No relevant news found."
+
+
+
 flask_app = Flask(__name__)
 
 @flask_app.route("/")
@@ -51,21 +147,18 @@ def trades():
         return send_file(LOG_FILE)
     except FileNotFoundError:
         return jsonify({
-            "balance": PAPER_BALANCE_USDC,
-            "total_pnl": 0.0,
-            "scan_count": 0,
-            "signals_analyzed": 0,
-            "trades_taken": 0,
+            "balance": PAPER_BALANCE_USDC, "total_pnl": 0.0,
+            "scan_count": 0, "signals_analyzed": 0, "trades_taken": 0,
             "start_time": datetime.now(timezone.utc).isoformat(),
-            "open_positions": [],
-            "closed_trades": [],
+            "open_positions": [], "closed_trades": [],
             "log": ["Bot starting up..."],
             "updated_at": datetime.now(timezone.utc).isoformat(),
         })
 
 @flask_app.route("/health")
 def health():
-    return jsonify({"status": "ok", "bot": "running"})
+    return jsonify({"status": "ok", "bot": "running",
+                    "scans": state.scan_count if 'state' in globals() else 0})
 
 def run_flask():
     port = int(os.getenv("PORT", 8080))
@@ -146,12 +239,11 @@ async def fetch_markets(limit: int = 50) -> list[Market]:
                 try:
                     op  = m.get("outcomePrices")
                     out = m.get("outcomes", '["Yes","No"]')
-
                     if op:
                         prices   = json.loads(op)  if isinstance(op,  str) else op
                         outcomes = json.loads(out) if isinstance(out, str) else out
                         yi = next((i for i, o in enumerate(outcomes) if o.lower() in ("yes","true")),  0)
-                        ni = next((i for i, o in enumerate(outcomes) if o.lower() in ("no", "false")), 1)
+                        ni = next((i for i, o in enumerate(outcomes) if o.lower() in ("no","false")),  1)
                         yes_p, no_p = float(prices[yi]), float(prices[ni])
                     else:
                         toks  = m.get("tokens", [])
@@ -191,12 +283,10 @@ def _mock_markets() -> list[Market]:
         ("Will ETH hit $4k before May 1?",            0.31, 0.69,   890_000, "crypto"),
         ("NBA: Lakers to win next game?",             0.55, 0.45,   340_000, "sports"),
         ("Will Fed cut rates in May 2026?",           0.38, 0.62, 1_200_000, "finance"),
-        ("Will NVDA stock be above $900 by May?",    0.61, 0.39,   560_000, "finance"),
         ("EPL: Arsenal to win vs Chelsea?",           0.48, 0.52,   230_000, "sports"),
         ("Will GPT-5 be announced before June?",     0.44, 0.56,   410_000, "tech"),
-        ("US inflation below 3% in April report?",   0.52, 0.48,   780_000, "finance"),
-        ("Will Solana flip Ethereum by market cap?", 0.12, 0.88,   150_000, "crypto"),
         ("NBA Finals: Will Celtics win 2026?",        0.28, 0.72, 1_900_000, "sports"),
+        ("Will NVDA stock be above $900 by May?",    0.61, 0.39,   560_000, "finance"),
     ]
     now = datetime.now(timezone.utc)
     return [
@@ -212,9 +302,7 @@ def _mock_markets() -> list[Market]:
     ]
 
 
-# ==============================================================================
-#  REPLICATE  /  LLAMA 3 70B
-# ==============================================================================
+
 async def call_replicate_llama(prompt: str) -> str:
     system = (
         "You are a quantitative prediction market analyst. "
@@ -228,7 +316,6 @@ async def call_replicate_llama(prompt: str) -> str:
         f"{prompt}<|eot_id|>"
         "<|start_header_id|>assistant<|end_header_id|>\n"
     )
-
     headers = {
         "Authorization": f"Bearer {REPLICATE_API_KEY}",
         "Content-Type":  "application/json",
@@ -257,7 +344,7 @@ async def call_replicate_llama(prompt: str) -> str:
 
         poll_url = result.get("urls", {}).get("get", "")
         if not poll_url:
-            raise ValueError(f"No output and no poll URL. Response: {result}")
+            raise ValueError(f"No output and no poll URL: {result}")
 
         for _ in range(30):
             await asyncio.sleep(1)
@@ -274,6 +361,10 @@ async def call_replicate_llama(prompt: str) -> str:
 
 
 async def analyse_market(market: Market) -> Optional[dict]:
+    # Fetch relevant news headlines (free, no API key)
+    news = await get_news_for_market(market.question, market.category)
+    log_event(f"[NEWS] {market.question[:40]} -> {news[:80]}...")
+
     prompt = (
         f"Analyse this Polymarket prediction market contract.\n\n"
         f"Question : {market.question}\n"
@@ -282,10 +373,12 @@ async def analyse_market(market: Market) -> Optional[dict]:
         f"NO  price: {market.no_price:.3f}\n"
         f"Volume 24h: ${market.volume:,.0f}\n"
         f"Description: {market.description or 'N/A'}\n\n"
-        f"Estimate the TRUE probability of YES based on your knowledge.\n\n"
+        f"RECENT NEWS CONTEXT (use this to improve your estimate):\n"
+        f"{news}\n\n"
+        f"Based on your knowledge AND the news context above, estimate the TRUE probability of YES.\n\n"
         f'Respond ONLY with this exact JSON (no markdown, no extra text):\n'
         f'{{"true_prob_yes": 0.55, "confidence": 0.70, "reasoning": "one sentence", "data_quality": "HIGH"}}\n\n'
-        f"data_quality: HIGH = well-known event, MEDIUM = some uncertainty, LOW = obscure"
+        f"data_quality: HIGH = well-known event with clear news, MEDIUM = some uncertainty, LOW = obscure/no news"
     )
 
     try:
@@ -304,6 +397,10 @@ async def analyse_market(market: Market) -> Optional[dict]:
         conf      = max(0.01, min(0.99, float(data.get("confidence",    0.5))))
         reasoning = data.get("reasoning", "")
         dq        = data.get("data_quality", "MEDIUM")
+
+        # Boost confidence when news is relevant (data_quality HIGH)
+        if dq == "HIGH":
+            conf = min(conf + 0.05, 0.99)
 
         edge_yes = true_prob - market.yes_price
         edge_no  = (1 - true_prob) - market.no_price
@@ -335,7 +432,7 @@ def detect_mispricing(market: Market) -> Optional[dict]:
 
 
 # ==============================================================================
-#  RISK MANAGER  -  tightened filters to avoid junk markets
+#  RISK MANAGER
 # ==============================================================================
 def risk_check(edge: float, confidence: float, market: Market) -> tuple[bool, str]:
     open_positions = [p for p in state.positions if p.status == "OPEN"]
@@ -344,12 +441,12 @@ def risk_check(edge: float, confidence: float, market: Market) -> tuple[bool, st
         return False, f"Max open positions ({MAX_OPEN_POSITIONS}) reached"
     if edge < MIN_EDGE_PCT:
         return False, f"Edge {edge:.3f} below min {MIN_EDGE_PCT}"
-    if confidence < 0.50:
+    if confidence < 0.48:
         return False, f"Confidence {confidence:.2f} too low"
-    if market.volume < 50_000:
-        return False, f"Volume ${market.volume:,.0f} below $50k minimum"
+    if market.volume < 30_000:
+        return False, f"Volume ${market.volume:,.0f} below $30k minimum"
 
-    # Block near-zero and near-certain markets (junk bets)
+    # Block near-zero and near-certain markets
     if market.yes_price < 0.05 or market.yes_price > 0.95:
         return False, f"Price {market.yes_price:.3f} too extreme -- skipping"
 
@@ -361,7 +458,9 @@ def risk_check(edge: float, confidence: float, market: Market) -> tuple[bool, st
 
 def position_size(edge: float, confidence: float) -> float:
     kelly = edge * confidence
-    return min(state.balance * kelly, state.balance * MAX_POSITION_PCT, state.balance * 0.05)
+    return min(state.balance * kelly,
+               state.balance * MAX_POSITION_PCT,
+               state.balance * 0.05)
 
 
 # ==============================================================================
@@ -408,6 +507,7 @@ def update_positions(markets: list[Market]):
             continue
         pos.current_price = simulate_price_drift(pos, markets)
         pos.pnl = (pos.current_price - pos.entry_price) * pos.shares
+
         if pos.current_price >= 0.90:
             _close(pos, pos.current_price, "TAKE_PROFIT")
         elif pos.current_price <= 0.10:
@@ -452,7 +552,7 @@ def log_event(msg: str):
 
 
 # ==============================================================================
-#  MAIN BOT LOOP
+#  MAIN SCAN LOOP
 # ==============================================================================
 async def scan_cycle():
     state.scan_count += 1
@@ -461,17 +561,26 @@ async def scan_cycle():
     markets = await fetch_markets(50)
     update_positions(markets)
 
-    open_ids   = {p.market_id for p in state.positions if p.status == "OPEN"}
+    open_ids = {p.market_id for p in state.positions if p.status == "OPEN"}
+
+    # UPGRADE 4: Focus on sports + crypto + politics (highest edge categories)
     candidates = sorted(
-        [m for m in markets if m.id not in open_ids and m.volume > 50_000],
+        [
+            m for m in markets
+            if m.id not in open_ids
+            and m.volume > 30_000
+            and m.category.lower() in ALLOWED_CATEGORIES
+        ],
         key=lambda m: m.volume, reverse=True
     )[:12]
+
+    log_event(f"[SCAN] {len(candidates)} candidate markets in allowed categories")
 
     for market in candidates:
         state.signals_analyzed += 1
 
         arb    = detect_mispricing(market)
-        signal = await analyse_market(market)
+        signal = await analyse_market(market)  # now includes RSS news context
 
         if not signal:
             continue
@@ -479,6 +588,7 @@ async def scan_cycle():
         if arb:
             signal["edge"]       = max(signal["edge"], arb["gap"] * 0.5)
             signal["confidence"] = min(signal["confidence"] + 0.1, 0.95)
+            log_event(f"[ARB] Spread anomaly detected on {market.question[:40]}")
 
         allow, reason = risk_check(signal["edge"], signal["confidence"], market)
         if not allow:
@@ -500,8 +610,9 @@ async def bot_loop():
     log_event("Polymarket AI Paper Trading Bot started")
     log_event(f"LLM    : Replicate -> {REPLICATE_MODEL}")
     log_event(f"Balance: ${state.balance:.2f} USDC (PAPER)")
-    log_event(f"Strategy: Llama 3 70B NLU + Arbitrage | Min edge: {MIN_EDGE_PCT:.0%}")
-    log_event(f"Scan interval: {SCAN_INTERVAL}s | Max positions: {MAX_OPEN_POSITIONS}")
+    log_event(f"Strategy: Llama 3 70B + RSS News + Sports Focus")
+    log_event(f"Min edge: {MIN_EDGE_PCT:.0%} | Max positions: {MAX_OPEN_POSITIONS}")
+    log_event(f"Categories: {', '.join(ALLOWED_CATEGORIES)}")
     log_event("-" * 60)
 
     while True:
@@ -513,13 +624,10 @@ async def bot_loop():
 
 
 # ==============================================================================
-#  ENTRY POINT  -  starts Flask + Bot together
+#  ENTRY POINT
 # ==============================================================================
 if __name__ == "__main__":
-    # Start Flask dashboard in background thread
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     log_event(f"Dashboard running on port {os.getenv('PORT', 8080)}")
-
-    # Start the bot (blocks forever)
     asyncio.run(bot_loop())
