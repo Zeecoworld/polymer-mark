@@ -1,21 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 Polymarket AI Paper Trading Bot
-Strategy : Replicate (Llama 3.3 70B) NLU + Spread Arbitrage + Risk Management
+Strategy : Replicate (Llama 3 70B) NLU + Spread Arbitrage + Risk Management
 Mode     : PAPER TRADE ONLY  -  no real money moves
-Author   : github.com/zeecomedia
-
-SETUP
------
-1. pip install httpx
-2. Get free token at https://replicate.com  (sign up, no card needed for $5 credit)
-3. Paste your token in REPLICATE_API_KEY below (line 22)
-4. python bot.py
-
-DASHBOARD
----------
-In a second terminal:  python -m http.server 8080
-Then open:             http://localhost:8080/dashboard.html
+Deploy   : Render.com (free tier)
 """
 
 import asyncio
@@ -23,29 +11,65 @@ import json
 import random
 import httpx
 import os
+import threading
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field, asdict
 from typing import Optional
-
-# ==============================================================================
-#  CONFIG  -  edit these
-# ==============================================================================
+from flask import Flask, send_file, jsonify
 
 from dotenv import load_dotenv
 
-load_dotenv()  # Loads variables from .env
-
-REPLICATE_API_KEY  = os.getenv("REPLICATE_API_KEY")          # <-- paste your token here
+load_dotenv()
+# ==============================================================================
+#  CONFIG  -  use environment variables on Render, fallback for local dev
+# ==============================================================================
+REPLICATE_API_KEY  = os.getenv("REPLICATE_API_KEY", "YOUR_r8_TOKEN_HERE")
 REPLICATE_MODEL    = "meta/meta-llama-3-70b-instruct"
 REPLICATE_API_URL  = "https://api.replicate.com/v1/models/{model}/predictions"
 
-PAPER_BALANCE_USDC  = 1000.0   # starting paper balance
+PAPER_BALANCE_USDC  = 1000.0
 GAMMA_API           = "https://gamma-api.polymarket.com"
-SCAN_INTERVAL       = 30       # seconds between scans
-MAX_POSITION_PCT    = 0.05     # max 5% of balance per trade
-MIN_EDGE_PCT        = 0.04     # minimum edge to enter (4 cents on $1)
-MAX_OPEN_POSITIONS  = 8
+SCAN_INTERVAL       = 30
+MAX_POSITION_PCT    = 0.03     # max 3% of balance per trade
+MIN_EDGE_PCT        = 0.06     # minimum 6 cents edge
+MAX_OPEN_POSITIONS  = 5
 LOG_FILE            = "paper_trades.json"
+
+
+# ==============================================================================
+#  FLASK  -  serves dashboard + JSON at your Render URL
+# ==============================================================================
+flask_app = Flask(__name__)
+
+@flask_app.route("/")
+def dashboard():
+    return send_file("dashboard.html")
+
+@flask_app.route("/paper_trades.json")
+def trades():
+    try:
+        return send_file(LOG_FILE)
+    except FileNotFoundError:
+        return jsonify({
+            "balance": PAPER_BALANCE_USDC,
+            "total_pnl": 0.0,
+            "scan_count": 0,
+            "signals_analyzed": 0,
+            "trades_taken": 0,
+            "start_time": datetime.now(timezone.utc).isoformat(),
+            "open_positions": [],
+            "closed_trades": [],
+            "log": ["Bot starting up..."],
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+@flask_app.route("/health")
+def health():
+    return jsonify({"status": "ok", "bot": "running"})
+
+def run_flask():
+    port = int(os.getenv("PORT", 8080))
+    flask_app.run(host="0.0.0.0", port=port)
 
 
 # ==============================================================================
@@ -67,14 +91,14 @@ class Market:
 class Position:
     market_id:         str
     question:          str
-    side:              str    # YES | NO
+    side:              str
     shares:            float
     entry_price:       float
     current_price:     float
     timestamp:         str
     claude_confidence: float
     edge:              float
-    status:            str   = "OPEN"   # OPEN | CLOSED
+    status:            str   = "OPEN"
     pnl:               float = 0.0
     close_price:       float = 0.0
     close_time:        str   = ""
@@ -97,14 +121,9 @@ state = BotState()
 
 
 # ==============================================================================
-#  POLYMARKET GAMMA API  (2026 structure)
+#  POLYMARKET GAMMA API
 # ==============================================================================
 async def fetch_markets(limit: int = 50) -> list[Market]:
-    """
-    Fetch active markets sorted by 24h volume (highest first).
-    Prices come in outcomePrices as a JSON string: "[0.65, 0.35]"
-    index 0 = YES, index 1 = NO
-    """
     try:
         async with httpx.AsyncClient(timeout=15) as http:
             r = await http.get(
@@ -125,7 +144,6 @@ async def fetch_markets(limit: int = 50) -> list[Market]:
             markets = []
             for m in items:
                 try:
-                    # --- current 2026 price structure ---
                     op  = m.get("outcomePrices")
                     out = m.get("outcomes", '["Yes","No"]')
 
@@ -136,7 +154,6 @@ async def fetch_markets(limit: int = 50) -> list[Market]:
                         ni = next((i for i, o in enumerate(outcomes) if o.lower() in ("no", "false")), 1)
                         yes_p, no_p = float(prices[yi]), float(prices[ni])
                     else:
-                        # fallback: older tokens[] structure
                         toks  = m.get("tokens", [])
                         y_tok = next((t for t in toks if str(t.get("outcome","")).upper() == "YES"), None)
                         n_tok = next((t for t in toks if str(t.get("outcome","")).upper() == "NO"),  None)
@@ -169,7 +186,6 @@ async def fetch_markets(limit: int = 50) -> list[Market]:
 
 
 def _mock_markets() -> list[Market]:
-    """Fallback synthetic markets when the API is unreachable."""
     base = [
         ("Will BTC close above $90k on Apr 15?",     0.42, 0.58, 2_100_000, "crypto"),
         ("Will ETH hit $4k before May 1?",            0.31, 0.69,   890_000, "crypto"),
@@ -197,19 +213,13 @@ def _mock_markets() -> list[Market]:
 
 
 # ==============================================================================
-#  REPLICATE  /  LLAMA 3.3 70B
+#  REPLICATE  /  LLAMA 3 70B
 # ==============================================================================
 async def call_replicate_llama(prompt: str) -> str:
-    """
-    Call meta/llama-3.3-70b-instruct on Replicate.
-    Uses Llama 3 chat template to embed system instructions -- no system_prompt field.
-    Prefer:wait header returns output synchronously (no polling needed).
-    """
     system = (
         "You are a quantitative prediction market analyst. "
         "Always respond with valid JSON only. No markdown fences, no extra text outside the JSON."
     )
-    # Llama 3 chat template
     formatted = (
         "<|begin_of_text|>"
         "<|start_header_id|>system<|end_header_id|>\n"
@@ -245,7 +255,6 @@ async def call_replicate_llama(prompt: str) -> str:
         if isinstance(output, str):
             return output.strip()
 
-        # fallback polling (cold boot)
         poll_url = result.get("urls", {}).get("get", "")
         if not poll_url:
             raise ValueError(f"No output and no poll URL. Response: {result}")
@@ -265,10 +274,6 @@ async def call_replicate_llama(prompt: str) -> str:
 
 
 async def analyse_market(market: Market) -> Optional[dict]:
-    """
-    Ask Llama to estimate the TRUE probability vs the market-implied price.
-    Returns dict with side, entry_price, true_prob, confidence, edge, reasoning.
-    """
     prompt = (
         f"Analyse this Polymarket prediction market contract.\n\n"
         f"Question : {market.question}\n"
@@ -286,7 +291,6 @@ async def analyse_market(market: Market) -> Optional[dict]:
     try:
         text = await call_replicate_llama(prompt)
 
-        # strip accidental markdown fences
         if "```" in text:
             text = text.split("```")[1]
             if text.startswith("json"):
@@ -319,10 +323,9 @@ async def analyse_market(market: Market) -> Optional[dict]:
 
 
 # ==============================================================================
-#  SPREAD ARBITRAGE  (free, no LLM call)
+#  SPREAD ARBITRAGE
 # ==============================================================================
 def detect_mispricing(market: Market) -> Optional[dict]:
-    """Flag markets where YES+NO prices don't sum to ~1.00 (price lag anomaly)."""
     spread = market.yes_price + market.no_price
     if spread < 0.94:
         gap  = 1.0 - spread
@@ -332,27 +335,33 @@ def detect_mispricing(market: Market) -> Optional[dict]:
 
 
 # ==============================================================================
-#  RISK MANAGER
+#  RISK MANAGER  -  tightened filters to avoid junk markets
 # ==============================================================================
 def risk_check(edge: float, confidence: float, market: Market) -> tuple[bool, str]:
     open_positions = [p for p in state.positions if p.status == "OPEN"]
+
     if len(open_positions) >= MAX_OPEN_POSITIONS:
         return False, f"Max open positions ({MAX_OPEN_POSITIONS}) reached"
     if edge < MIN_EDGE_PCT:
         return False, f"Edge {edge:.3f} below min {MIN_EDGE_PCT}"
-    if confidence < 0.45:
+    if confidence < 0.50:
         return False, f"Confidence {confidence:.2f} too low"
-    if market.volume < 10_000:
-        return False, f"Volume ${market.volume:,.0f} below $10k minimum"
+    if market.volume < 50_000:
+        return False, f"Volume ${market.volume:,.0f} below $50k minimum"
+
+    # Block near-zero and near-certain markets (junk bets)
+    if market.yes_price < 0.05 or market.yes_price > 0.95:
+        return False, f"Price {market.yes_price:.3f} too extreme -- skipping"
+
     if market.id in {p.market_id for p in open_positions}:
         return False, "Already have open position in this market"
+
     return True, "OK"
 
 
 def position_size(edge: float, confidence: float) -> float:
-    """Half-Kelly sizing capped at MAX_POSITION_PCT of balance."""
     kelly = edge * confidence
-    return min(state.balance * kelly, state.balance * MAX_POSITION_PCT, state.balance * 0.10)
+    return min(state.balance * kelly, state.balance * MAX_POSITION_PCT, state.balance * 0.05)
 
 
 # ==============================================================================
@@ -389,9 +398,8 @@ def simulate_price_drift(pos: Position, markets: list[Market]) -> float:
     live = next((m for m in markets if m.id == pos.market_id), None)
     if live:
         return live.yes_price if pos.side == "YES" else live.no_price
-    drift   = random.gauss(0.002, 0.015)
-    new_p   = pos.current_price + drift
-    return max(0.01, min(0.99, new_p))
+    drift = random.gauss(0.002, 0.015)
+    return max(0.01, min(0.99, pos.current_price + drift))
 
 
 def update_positions(markets: list[Market]):
@@ -423,16 +431,16 @@ def _close(pos: Position, price: float, reason: str):
 def save_state():
     with open(LOG_FILE, "w", encoding="utf-8") as f:
         json.dump({
-            "balance":        state.balance,
-            "total_pnl":      state.total_pnl,
-            "scan_count":     state.scan_count,
+            "balance":          state.balance,
+            "total_pnl":        state.total_pnl,
+            "scan_count":       state.scan_count,
             "signals_analyzed": state.signals_analyzed,
-            "trades_taken":   state.trades_taken,
-            "start_time":     state.start_time,
-            "open_positions": [asdict(p) for p in state.positions if p.status == "OPEN"],
-            "closed_trades":  state.closed_trades[-50:],
-            "log":            state.log[-100:],
-            "updated_at":     datetime.now(timezone.utc).isoformat(),
+            "trades_taken":     state.trades_taken,
+            "start_time":       state.start_time,
+            "open_positions":   [asdict(p) for p in state.positions if p.status == "OPEN"],
+            "closed_trades":    state.closed_trades[-50:],
+            "log":              state.log[-100:],
+            "updated_at":       datetime.now(timezone.utc).isoformat(),
         }, f, indent=2, ensure_ascii=False)
 
 
@@ -444,7 +452,7 @@ def log_event(msg: str):
 
 
 # ==============================================================================
-#  MAIN LOOP
+#  MAIN BOT LOOP
 # ==============================================================================
 async def scan_cycle():
     state.scan_count += 1
@@ -455,7 +463,7 @@ async def scan_cycle():
 
     open_ids   = {p.market_id for p in state.positions if p.status == "OPEN"}
     candidates = sorted(
-        [m for m in markets if m.id not in open_ids and m.volume > 10_000],
+        [m for m in markets if m.id not in open_ids and m.volume > 50_000],
         key=lambda m: m.volume, reverse=True
     )[:12]
 
@@ -488,44 +496,30 @@ async def scan_cycle():
     )
 
 
-async def main():
+async def bot_loop():
     log_event("Polymarket AI Paper Trading Bot started")
     log_event(f"LLM    : Replicate -> {REPLICATE_MODEL}")
     log_event(f"Balance: ${state.balance:.2f} USDC (PAPER)")
-    log_event(f"Strategy: Llama 3.3 70B NLU + Arbitrage | Min edge: {MIN_EDGE_PCT:.0%}")
+    log_event(f"Strategy: Llama 3 70B NLU + Arbitrage | Min edge: {MIN_EDGE_PCT:.0%}")
     log_event(f"Scan interval: {SCAN_INTERVAL}s | Max positions: {MAX_OPEN_POSITIONS}")
     log_event("-" * 60)
 
     while True:
         try:
             await scan_cycle()
-        except KeyboardInterrupt:
-            log_event("Bot stopped.")
-            save_state()
-            break
         except Exception as e:
             log_event(f"[LOOP ERROR] {e}")
         await asyncio.sleep(SCAN_INTERVAL)
 
 
-import threading
-from flask import Flask, send_file, jsonify
-
-flask_app = Flask(__name__)
-
-@flask_app.route("/")
-def dashboard():
-    return send_file("dashboard.html")
-
-@flask_app.route("/paper_trades.json")
-def trades():
-    return send_file("paper_trades.json")
-
-def run_flask():
-    flask_app.run(host="0.0.0.0", port=8080)
-
-# Start Flask in background thread
-threading.Thread(target=run_flask, daemon=True).start()
-
+# ==============================================================================
+#  ENTRY POINT  -  starts Flask + Bot together
+# ==============================================================================
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Start Flask dashboard in background thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    log_event(f"Dashboard running on port {os.getenv('PORT', 8080)}")
+
+    # Start the bot (blocks forever)
+    asyncio.run(bot_loop())
