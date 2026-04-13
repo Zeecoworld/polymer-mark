@@ -1,4 +1,5 @@
 
+
 import asyncio
 import json
 import random
@@ -11,12 +12,9 @@ from dataclasses import dataclass, field, asdict
 from typing import Optional
 from flask import Flask, send_file, jsonify
 
-
-from dotenv import load_dotenv
-
-load_dotenv()
-
-
+# ==============================================================================
+#  CONFIG
+# ==============================================================================
 REPLICATE_API_KEY  = os.getenv("REPLICATE_API_KEY", "YOUR_r8_TOKEN_HERE")
 REPLICATE_MODEL    = "meta/meta-llama-3-70b-instruct"
 REPLICATE_API_URL  = "https://api.replicate.com/v1/models/{model}/predictions"
@@ -84,6 +82,11 @@ async def fetch_rss(url: str) -> list[str]:
 
 
 async def get_news_for_market(market_question: str, category: str) -> str:
+    """
+    Get relevant news headlines for a market question.
+    Uses cached RSS data + keyword matching.
+    Returns a string of up to 5 relevant headlines.
+    """
     now = datetime.now(timezone.utc).timestamp()
     cat = category.lower()
 
@@ -134,7 +137,9 @@ async def get_news_for_market(market_question: str, category: str) -> str:
     return " | ".join(top) if top else "No relevant news found."
 
 
-
+# ==============================================================================
+#  FLASK DASHBOARD
+# ==============================================================================
 flask_app = Flask(__name__)
 
 @flask_app.route("/")
@@ -302,7 +307,9 @@ def _mock_markets() -> list[Market]:
     ]
 
 
-
+# ==============================================================================
+#  REPLICATE  /  LLAMA 3 70B  +  NEWS CONTEXT
+# ==============================================================================
 async def call_replicate_llama(prompt: str) -> str:
     system = (
         "You are a quantitative prediction market analyst. "
@@ -361,6 +368,10 @@ async def call_replicate_llama(prompt: str) -> str:
 
 
 async def analyse_market(market: Market) -> Optional[dict]:
+    """
+    Analyse a market using Llama + fresh RSS news context.
+    News is fetched for free from public RSS feeds.
+    """
     # Fetch relevant news headlines (free, no API key)
     news = await get_news_for_market(market.question, market.category)
     log_event(f"[NEWS] {market.question[:40]} -> {news[:80]}...")
@@ -563,18 +574,32 @@ async def scan_cycle():
 
     open_ids = {p.market_id for p in state.positions if p.status == "OPEN"}
 
-    # UPGRADE 4: Focus on sports + crypto + politics (highest edge categories)
+    # Log actual categories from Polymarket for debugging
+    seen_cats = sorted(set(m.category for m in markets if m.category))
+    log_event(f"[CATS] {seen_cats[:15]}")
+
+    def category_allowed(cat: str) -> bool:
+        c = cat.lower()
+        return any(kw in c for kw in [
+            "sport", "soccer", "football", "basketball", "nba", "nfl",
+            "nhl", "mlb", "tennis", "golf", "cricket", "rugby", "ufc",
+            "mma", "boxing", "baseball", "hockey", "fifa", "epl", "mls",
+            "crypto", "bitcoin", "ethereum", "blockchain", "defi",
+            "politic", "govern", "election", "vote",
+            "financ", "econom", "market", "stock",
+        ])
+
     candidates = sorted(
         [
             m for m in markets
             if m.id not in open_ids
             and m.volume > 30_000
-            and m.category.lower() in ALLOWED_CATEGORIES
+            and category_allowed(m.category)
         ],
         key=lambda m: m.volume, reverse=True
     )[:12]
 
-    log_event(f"[SCAN] {len(candidates)} candidate markets in allowed categories")
+    log_event(f"[SCAN] {len(candidates)} candidates after category filter")
 
     for market in candidates:
         state.signals_analyzed += 1
