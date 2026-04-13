@@ -27,9 +27,6 @@ MIN_EDGE_PCT        = 0.05
 MAX_OPEN_POSITIONS  = 6
 LOG_FILE            = "paper_trades.json"
 
-# Only trade these categories (sports + crypto perform best)
-ALLOWED_CATEGORIES  = {"sports", "crypto", "politics", "finance"}
-
 # ==============================================================================
 #  FREE RSS NEWS FEEDS  -  no API key, no limits
 # ==============================================================================
@@ -574,19 +571,27 @@ async def scan_cycle():
 
     open_ids = {p.market_id for p in state.positions if p.status == "OPEN"}
 
-    # Log actual categories from Polymarket for debugging
-    seen_cats = sorted(set(m.category for m in markets if m.category))
-    log_event(f"[CATS] {seen_cats[:15]}")
-
-    def category_allowed(cat: str) -> bool:
-        c = cat.lower()
-        return any(kw in c for kw in [
-            "sport", "soccer", "football", "basketball", "nba", "nfl",
-            "nhl", "mlb", "tennis", "golf", "cricket", "rugby", "ufc",
-            "mma", "boxing", "baseball", "hockey", "fifa", "epl", "mls",
-            "crypto", "bitcoin", "ethereum", "blockchain", "defi",
-            "politic", "govern", "election", "vote",
-            "financ", "econom", "market", "stock",
+    # Polymarket returns "misc" for most categories, so we filter by
+    # question keywords instead of the unreliable category field.
+    def question_allowed(q: str) -> bool:
+        """Allow sports, crypto, politics, finance based on question text."""
+        t = q.lower()
+        return any(kw in t for kw in [
+            # sports
+            "win", "nba", "nfl", "fifa", "epl", "soccer", "football",
+            "basketball", "tennis", "golf", "cricket", "ufc", "boxing",
+            "baseball", "hockey", "mls", "championship", "league", "cup",
+            "match", "game", "season", "playoff", "finals", "tournament",
+            # crypto
+            "bitcoin", "btc", "ethereum", "eth", "crypto", "solana",
+            "coinbase", "binance", "blockchain", "defi", "nft",
+            # politics
+            "president", "election", "vote", "prime minister", "senate",
+            "congress", "trump", "policy", "war", "ceasefire", "iran",
+            "ukraine", "china", "russia", "tariff",
+            # finance
+            "fed", "rate", "inflation", "gdp", "stock", "market",
+            "nasdaq", "s&p", "recession", "oil", "gold",
         ])
 
     candidates = sorted(
@@ -594,12 +599,12 @@ async def scan_cycle():
             m for m in markets
             if m.id not in open_ids
             and m.volume > 30_000
-            and category_allowed(m.category)
+            and question_allowed(m.question)
         ],
         key=lambda m: m.volume, reverse=True
     )[:12]
 
-    log_event(f"[SCAN] {len(candidates)} candidates after category filter")
+    log_event(f"[SCAN] {len(candidates)} candidates (keyword filter on question)")
 
     for market in candidates:
         state.signals_analyzed += 1
@@ -637,7 +642,7 @@ async def bot_loop():
     log_event(f"Balance: ${state.balance:.2f} USDC (PAPER)")
     log_event(f"Strategy: Llama 3 70B + RSS News + Sports Focus")
     log_event(f"Min edge: {MIN_EDGE_PCT:.0%} | Max positions: {MAX_OPEN_POSITIONS}")
-    log_event(f"Categories: {', '.join(ALLOWED_CATEGORIES)}")
+    log_event("Category filter: keyword-based on question text")
     log_event("-" * 60)
 
     while True:
