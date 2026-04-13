@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Polymarket AI Bot — Paper Trading Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #080c10;
+    --surface: #0e1318;
+    --surface2: #141b22;
+    --border: #1e2a35;
+    --green: #00e5a0;
+    --green-dim: #00a870;
+    --red: #ff4560;
+    --yellow: #f5c518;
+    --blue: #3b9eff;
+    --text: #d4e2ed;
+    --muted: #566877;
+    --mono: 'Space Mono', monospace;
+    --sans: 'Syne', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Grid noise texture */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(0,229,160,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,229,160,0.025) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .wrapper { position: relative; z-index: 1; max-width: 1400px; margin: 0 auto; padding: 24px 20px; }
+
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 28px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .brand {
+    display: flex; align-items: center; gap: 14px;
+  }
+  .brand-icon {
+    width: 40px; height: 40px;
+    background: linear-gradient(135deg, var(--green), #009966);
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+  }
+  .brand-text { font-family: var(--sans); }
+  .brand-name { font-size: 18px; font-weight: 800; color: #fff; letter-spacing: -0.5px; }
+  .brand-sub  { font-size: 11px; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; }
+
+  .status-pill {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 14px; border-radius: 99px;
+    border: 1px solid var(--green-dim);
+    font-size: 11px; letter-spacing: 1px; text-transform: uppercase;
+    color: var(--green);
+  }
+  .pulse {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--green);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%,100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.4; transform: scale(0.7); }
+  }
+
+  /* ── Stat Cards ── */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+    position: relative;
+    overflow: hidden;
+  }
+  .stat-card::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: var(--accent, var(--green));
+  }
+  .stat-label { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+  .stat-value { font-family: var(--sans); font-size: 26px; font-weight: 800; color: #fff; line-height: 1; }
+  .stat-sub   { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .pos { color: var(--green) !important; }
+  .neg { color: var(--red) !important; }
+
+  /* ── Two-col layout ── */
+  .main-grid {
+    display: grid;
+    grid-template-columns: 1fr 380px;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+
+  /* ── Panel ── */
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .panel-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface2);
+  }
+  .panel-title { font-family: var(--sans); font-weight: 700; font-size: 13px; color: #fff; letter-spacing: 0.3px; }
+  .panel-badge { font-size: 10px; padding: 3px 8px; border-radius: 99px; background: var(--border); color: var(--muted); }
+
+  /* ── Positions table ── */
+  .pos-table { width: 100%; border-collapse: collapse; }
+  .pos-table th {
+    font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase;
+    color: var(--muted); padding: 10px 18px; text-align: left;
+    background: var(--surface2); border-bottom: 1px solid var(--border);
+  }
+  .pos-table td { padding: 12px 18px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  .pos-table tr:last-child td { border-bottom: none; }
+  .pos-table tr:hover td { background: rgba(255,255,255,0.02); }
+
+  .side-badge {
+    display: inline-block; padding: 2px 8px; border-radius: 4px;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+  }
+  .side-YES { background: rgba(0,229,160,0.12); color: var(--green); border: 1px solid rgba(0,229,160,0.25); }
+  .side-NO  { background: rgba(255,69,96,0.12);  color: var(--red);   border: 1px solid rgba(255,69,96,0.25); }
+
+  .q-text { max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .progress-bar {
+    width: 80px; height: 5px; background: var(--border); border-radius: 99px; overflow: hidden;
+  }
+  .progress-fill { height: 100%; border-radius: 99px; transition: width 0.4s ease; }
+
+  /* ── Log panel ── */
+  .log-box {
+    height: 320px; overflow-y: auto;
+    padding: 12px;
+    font-size: 11px; line-height: 1.8;
+    color: var(--muted);
+  }
+  .log-box::-webkit-scrollbar { width: 4px; }
+  .log-box::-webkit-scrollbar-track { background: transparent; }
+  .log-box::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+  .log-line { padding: 2px 0; border-bottom: 1px solid rgba(255,255,255,0.02); }
+  .log-line.open   { color: var(--green); }
+  .log-line.close  { color: var(--blue); }
+  .log-line.skip   { color: var(--muted); }
+  .log-line.error  { color: var(--red); }
+
+  /* ── Closed trades ── */
+  .trade-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 11px 18px; border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .trade-row:last-child { border-bottom: none; }
+  .trade-q { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); margin-right: 12px; }
+  .trade-pnl { font-weight: 700; font-family: var(--sans); font-size: 14px; }
+
+  /* ── Chart ── */
+  .equity-chart { padding: 16px 18px 8px; }
+  canvas { width: 100% !important; }
+
+  /* ── Bottom row ── */
+  .bottom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+  /* ── Refresh bar ── */
+  .refresh-info {
+    text-align: center; font-size: 10px; color: var(--muted);
+    padding: 16px; letter-spacing: 0.5px;
+  }
+  #countdown { color: var(--green); }
+
+  /* ── Empty state ── */
+  .empty { padding: 40px; text-align: center; color: var(--muted); font-size: 12px; }
+
+  @media (max-width: 900px) {
+    .main-grid, .bottom-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrapper">
+
+  <!-- Header -->
+  <header>
+    <div class="brand">
+      <div class="brand-icon">🤖</div>
+      <div class="brand-text">
+        <div class="brand-name">PolyBot AI</div>
+        <div class="brand-sub">Claude-Powered Paper Trader</div>
+      </div>
+    </div>
+    <div class="status-pill">
+      <div class="pulse"></div>
+      PAPER TRADING · LIVE
+    </div>
+  </header>
+
+  <!-- Stats -->
+  <div class="stats-grid">
+    <div class="stat-card" style="--accent:var(--green)">
+      <div class="stat-label">Paper Balance</div>
+      <div class="stat-value" id="balance">$1,000.00</div>
+      <div class="stat-sub">USDC (simulated)</div>
+    </div>
+    <div class="stat-card" style="--accent:var(--blue)">
+      <div class="stat-label">Total P&L</div>
+      <div class="stat-value" id="pnl">$0.00</div>
+      <div class="stat-sub" id="pnl-pct">0.00% return</div>
+    </div>
+    <div class="stat-card" style="--accent:var(--yellow)">
+      <div class="stat-label">Open Positions</div>
+      <div class="stat-value" id="open-pos">0</div>
+      <div class="stat-sub" id="closed-pos">0 closed</div>
+    </div>
+    <div class="stat-card" style="--accent:var(--blue)">
+      <div class="stat-label">Signals Analysed</div>
+      <div class="stat-value" id="signals">0</div>
+      <div class="stat-sub" id="scans">0 scans</div>
+    </div>
+    <div class="stat-card" style="--accent:var(--red)">
+      <div class="stat-label">Win Rate</div>
+      <div class="stat-value" id="winrate">—</div>
+      <div class="stat-sub" id="trades-taken">0 trades</div>
+    </div>
+    <div class="stat-card" style="--accent:var(--green)">
+      <div class="stat-label">Uptime</div>
+      <div class="stat-value" id="uptime">00:00:00</div>
+      <div class="stat-sub" id="started">—</div>
+    </div>
+  </div>
+
+  <!-- Equity Curve -->
+  <div class="panel" style="margin-bottom:16px">
+    <div class="panel-header">
+      <span class="panel-title">Equity Curve</span>
+      <span class="panel-badge" id="equity-label">Paper Balance Over Time</span>
+    </div>
+    <div class="equity-chart">
+      <canvas id="equityChart" height="100"></canvas>
+    </div>
+  </div>
+
+  <!-- Main Grid: Open Positions + Log -->
+  <div class="main-grid">
+
+    <!-- Open Positions -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Open Positions</span>
+        <span class="panel-badge" id="open-count-badge">0 active</span>
+      </div>
+      <div id="positions-body">
+        <div class="empty">No open positions yet.<br>Bot is scanning markets…</div>
+      </div>
+    </div>
+
+    <!-- Log -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Bot Log</span>
+        <span class="panel-badge">Live</span>
+      </div>
+      <div class="log-box" id="log-box">
+        <div class="log-line">Waiting for bot data…</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Bottom Grid: Closed Trades -->
+  <div class="bottom-grid">
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Recent Closed Trades</span>
+        <span class="panel-badge" id="closed-count-badge">0</span>
+      </div>
+      <div id="closed-body">
+        <div class="empty">No closed trades yet.</div>
+      </div>
+    </div>
+
+    <!-- Strategy Info -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Strategy Config</span>
+      </div>
+      <div style="padding: 18px; line-height: 2.2; font-size: 12px;">
+        <div><span style="color:var(--muted)">Model ·</span> llama-3.3-70b-instruct</div>
+        <div><span style="color:var(--muted)">Strategy ·</span> NLU Arb + Spread Detection</div>
+        <div><span style="color:var(--muted)">Provider ·</span> Replicate (free tier)</div>
+        <div><span style="color:var(--muted)">Min Edge ·</span> <span style="color:var(--yellow)">4.0%</span></div>
+        <div><span style="color:var(--muted)">Min Confidence ·</span> <span style="color:var(--yellow)">45%</span></div>
+        <div><span style="color:var(--muted)">Max Position ·</span> <span style="color:var(--yellow)">5% of balance</span></div>
+        <div><span style="color:var(--muted)">Max Open ·</span> <span style="color:var(--yellow)">8 positions</span></div>
+        <div><span style="color:var(--muted)">Take Profit ·</span> <span style="color:var(--green)">90¢ per share</span></div>
+        <div><span style="color:var(--muted)">Stop Loss ·</span> <span style="color:var(--red)">10¢ per share</span></div>
+        <div><span style="color:var(--muted)">Mode ·</span> <span style="color:var(--green)">📄 PAPER ONLY</span></div>
+        <div style="margin-top:14px; padding:10px 14px; background:rgba(255,69,96,0.07); border:1px solid rgba(255,69,96,0.2); border-radius:8px; font-size:11px; color:var(--red);">
+          ⚠️ Paper trading only. No real funds at risk.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="refresh-info">
+    Auto-refreshes every <span id="countdown">10</span>s &nbsp;·&nbsp; reads <code>paper_trades.json</code>
+  </div>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+// ── Chart Setup ────────────────────────────────────────────────────────────
+const ctx = document.getElementById('equityChart').getContext('2d');
+const equityData = { labels: [], datasets: [{
+  label: 'Balance',
+  data: [],
+  borderColor: '#00e5a0',
+  backgroundColor: 'rgba(0,229,160,0.06)',
+  borderWidth: 2,
+  fill: true,
+  tension: 0.4,
+  pointRadius: 2,
+  pointBackgroundColor: '#00e5a0',
+}]};
+const chart = new Chart(ctx, {
+  type: 'line',
+  data: equityData,
+  options: {
+    responsive: true,
+    animation: { duration: 400 },
+    plugins: { legend: { display: false }, tooltip: {
+      backgroundColor: '#141b22',
+      borderColor: '#1e2a35',
+      borderWidth: 1,
+      titleColor: '#d4e2ed',
+      bodyColor: '#00e5a0',
+      callbacks: { label: c => ` $${c.raw.toFixed(2)}` }
+    }},
+    scales: {
+      x: { grid: { color: '#1e2a35' }, ticks: { color: '#566877', font: { family: 'Space Mono', size: 10 } } },
+      y: { grid: { color: '#1e2a35' }, ticks: { color: '#566877', font: { family: 'Space Mono', size: 10 },
+           callback: v => '$' + v.toFixed(0) } }
+    }
+  }
+});
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+const fmt = (n, dec=2) => '$' + Math.abs(n).toFixed(dec);
+const sign = n => n >= 0 ? '+' : '-';
+const pnlClass = n => n >= 0 ? 'pos' : 'neg';
+const el = id => document.getElementById(id);
+
+function uptime(startISO) {
+  const diff = Math.floor((Date.now() - new Date(startISO)) / 1000);
+  const h = String(Math.floor(diff/3600)).padStart(2,'0');
+  const m = String(Math.floor((diff%3600)/60)).padStart(2,'0');
+  const s = String(diff%60).padStart(2,'0');
+  return `${h}:${m}:${s}`;
+}
+
+// ── Render ─────────────────────────────────────────────────────────────────
+let lastBalance = 1000;
+
+function render(data) {
+  // Stats
+  el('balance').textContent = '$' + data.balance.toFixed(2);
+  const pnl = data.total_pnl || 0;
+  const startBal = 1000;
+  const pct = ((data.balance - startBal) / startBal * 100).toFixed(2);
+  el('pnl').textContent = sign(pnl) + fmt(pnl);
+  el('pnl').className = 'stat-value ' + pnlClass(pnl);
+  el('pnl-pct').textContent = sign(pct) + Math.abs(pct) + '% return';
+
+  const openPos = data.open_positions || [];
+  const closedTrades = data.closed_trades || [];
+
+  el('open-pos').textContent = openPos.length;
+  el('closed-pos').textContent = closedTrades.length + ' closed';
+  el('open-count-badge').textContent = openPos.length + ' active';
+  el('closed-count-badge').textContent = closedTrades.length;
+
+  el('signals').textContent = data.signals_analyzed || 0;
+  el('scans').textContent = (data.scan_count || 0) + ' scans';
+  el('trades-taken').textContent = (data.trades_taken || 0) + ' trades';
+
+  // Win rate
+  const wins = closedTrades.filter(t => t.pnl > 0).length;
+  el('winrate').textContent = closedTrades.length > 0
+    ? Math.round(wins / closedTrades.length * 100) + '%' : '—';
+
+  // Uptime
+  if (data.start_time) {
+    el('uptime').textContent = uptime(data.start_time);
+    el('started').textContent = 'since ' + new Date(data.start_time).toLocaleTimeString();
+  }
+
+  // Equity chart
+  if (data.balance !== lastBalance) {
+    const now = new Date().toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    equityData.labels.push(now);
+    equityData.datasets[0].data.push(data.balance);
+    if (equityData.labels.length > 60) {
+      equityData.labels.shift();
+      equityData.datasets[0].data.shift();
+    }
+    chart.update();
+    lastBalance = data.balance;
+  }
+
+  // Open positions
+  const posEl = el('positions-body');
+  if (openPos.length === 0) {
+    posEl.innerHTML = '<div class="empty">No open positions yet.<br>Bot is scanning markets…</div>';
+  } else {
+    const rows = openPos.map(p => {
+      const pnl = p.pnl || 0;
+      const edgePct = Math.round(p.edge * 100);
+      const confPct = Math.round(p.claude_confidence * 100);
+      const priceColor = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+      return `<tr>
+        <td><span class="side-badge side-${p.side}">${p.side}</span></td>
+        <td><div class="q-text">${p.question}</div></td>
+        <td>${p.entry_price.toFixed(3)}</td>
+        <td style="color:${priceColor}">${(p.current_price||p.entry_price).toFixed(3)}</td>
+        <td class="${pnlClass(pnl)}">${sign(pnl)}${fmt(pnl)}</td>
+        <td>
+          <div class="progress-bar"><div class="progress-fill" style="width:${confPct}%;background:${priceColor}"></div></div>
+          <div style="font-size:10px;color:var(--muted);margin-top:3px">${confPct}% conf · ${edgePct}% edge</div>
+        </td>
+      </tr>`;
+    }).join('');
+    posEl.innerHTML = `<table class="pos-table">
+      <thead><tr>
+        <th>Side</th><th>Market</th><th>Entry</th><th>Current</th><th>P&L</th><th>Confidence</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  }
+
+  // Closed trades
+  const closedEl = el('closed-body');
+  if (closedTrades.length === 0) {
+    closedEl.innerHTML = '<div class="empty">No closed trades yet.</div>';
+  } else {
+    const rows = [...closedTrades].reverse().slice(0,20).map(t => {
+      const pnl = t.pnl || 0;
+      return `<div class="trade-row">
+        <div class="trade-q">${t.question}</div>
+        <span class="side-badge side-${t.side}" style="margin-right:10px">${t.side}</span>
+        <span class="trade-pnl ${pnlClass(pnl)}">${sign(pnl)}${fmt(pnl)}</span>
+      </div>`;
+    }).join('');
+    closedEl.innerHTML = rows;
+  }
+
+  // Log
+  const logEl = el('log-box');
+  if (data.log && data.log.length) {
+    const lines = [...data.log].reverse().slice(0,80).map(l => {
+      let cls = '';
+      if (l.includes('[OPEN]'))  cls = 'open';
+      else if (l.includes('[CLOSE')) cls = 'close';
+      else if (l.includes('[SKIP]') || l.includes('[API')) cls = 'skip';
+      else if (l.includes('ERROR')) cls = 'error';
+      return `<div class="log-line ${cls}">${l}</div>`;
+    }).join('');
+    logEl.innerHTML = lines;
+  }
+}
+
+// ── Load state from JSON file ──────────────────────────────────────────────
+// In a real setup, serve paper_trades.json via a local HTTP server.
+// This dashboard loads it from same directory.
+async function loadData() {
+  try {
+    const r = await fetch('paper_trades.json?t=' + Date.now());
+    if (!r.ok) throw new Error('not found');
+    const data = await r.json();
+    render(data);
+  } catch(e) {
+    // Show mock/demo data when file not found
+    render(getMockData());
+  }
+}
+
+function getMockData() {
+  const now = new Date();
+  return {
+    balance: 1000 + Math.random() * 50,
+    total_pnl: 10 + Math.random() * 40,
+    scan_count: Math.floor(Math.random()*5)+1,
+    signals_analyzed: Math.floor(Math.random()*30)+5,
+    trades_taken: Math.floor(Math.random()*6)+1,
+    start_time: new Date(now - 600_000).toISOString(),
+    open_positions: [
+      { market_id:'1', question:'Will BTC close above $90k on Apr 15?', side:'YES',
+        entry_price:0.42, current_price:0.47, pnl:5.20, claude_confidence:0.72, edge:0.08 },
+      { market_id:'2', question:'NBA: Lakers to win next game?', side:'NO',
+        entry_price:0.45, current_price:0.41, pnl:3.10, claude_confidence:0.65, edge:0.06 },
+    ],
+    closed_trades: [
+      { question:'EPL: Arsenal vs Chelsea', side:'YES', pnl:12.40 },
+      { question:'Will Fed cut rates in May?', side:'NO', pnl:-4.10 },
+      { question:'Will ETH hit $4k before May?', side:'NO', pnl:8.80 },
+    ],
+    log: [
+      '[12:00:01] ── Scan #1 ──────────────────────────────',
+      '[12:00:02] Fetched 10 markets',
+      '[12:00:04] [OPEN] YES Will BTC close above $90k | edge=0.080 | size=$42.00',
+      '[12:00:06] [OPEN] NO NBA: Lakers to win next game | edge=0.060 | size=$35.00',
+      '[12:00:08] [SKIP] Will ETH hit $4k — Edge 0.020 < min 0.040',
+      '[12:00:10] Balance: $923.00 | PnL: +$8.30 | Open: 2',
+    ]
+  };
+}
+
+// ── Countdown & polling ────────────────────────────────────────────────────
+let secs = 10;
+loadData();
+setInterval(() => {
+  secs--;
+  el('countdown').textContent = secs;
+  if (secs <= 0) { secs = 10; loadData(); }
+}, 1000);
+
+// Also tick uptime every second
+setInterval(() => {
+  // just re-render uptime without re-fetching
+}, 1000);
+</script>
+</body>
+</html>
