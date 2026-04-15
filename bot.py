@@ -1,16 +1,20 @@
-
-
 import asyncio
 import json
 import random
 import httpx
 import os
-import threading
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field, asdict
 from typing import Optional
-from flask import Flask, send_file, jsonify
+from aiohttp import web as aio_web
+
+
+from dotenv import load_dotenv
+
+
+# Load environment variables from the .env file (if present)
+load_dotenv()
 
 # ==============================================================================
 #  CONFIG
@@ -21,14 +25,23 @@ REPLICATE_API_URL  = "https://api.replicate.com/v1/models/{model}/predictions"
 
 PAPER_BALANCE_USDC  = 1000.0
 GAMMA_API           = "https://gamma-api.polymarket.com"
-SCAN_INTERVAL       = 30
+SCAN_INTERVAL       = 60
 MAX_POSITION_PCT    = 0.04
 MIN_EDGE_PCT        = 0.05
-MAX_OPEN_POSITIONS  = 6
+MAX_OPEN_POSITIONS  = 3
 LOG_FILE            = "paper_trades.json"
 
 # ==============================================================================
-#  FREE RSS NEWS FEEDS  -  no API key, no limits
+#  STARTUP GUARD  — catches missing API key before bot wastes any cycles
+# ==============================================================================
+if REPLICATE_API_KEY.startswith("YOUR_"):
+    raise RuntimeError(
+        "REPLICATE_API_KEY is not set. "
+        "Add it as an environment variable in your Render dashboard."
+    )
+
+# ==============================================================================
+#  FREE RSS NEWS FEEDS
 # ==============================================================================
 RSS_FEEDS = {
     "sports": [
@@ -49,45 +62,56 @@ RSS_FEEDS = {
     ],
 }
 
-# Cache news so we don't hammer RSS feeds every scan
 _news_cache: dict = {}
 _news_cache_time: dict = {}
-NEWS_CACHE_TTL = 300  # refresh every 5 minutes
+NEWS_CACHE_TTL = 300
 
+# ==============================================================================
+#  SINGLE SHARED HTTP CLIENT with connection limits
+# ==============================================================================
+_http: Optional[httpx.AsyncClient] = None
 
+async def get_http() -> httpx.AsyncClient:
+    global _http
+    if _http is None or _http.is_closed:
+        _http = httpx.AsyncClient(
+            timeout=15,
+            follow_redirects=True,
+            limits=httpx.Limits(
+                max_connections=5,
+                max_keepalive_connections=2
+            )
+        )
+    return _http
+
+# ==============================================================================
+#  RSS NEWS — max 2 feeds per scan
+# ==============================================================================
 async def fetch_rss(url: str) -> list[str]:
-    """Fetch and parse an RSS feed, returning list of headlines."""
     try:
-        async with httpx.AsyncClient(timeout=8, follow_redirects=True) as http:
-            r = await http.get(url, headers={"User-Agent": "Mozilla/5.0"})
-            if r.status_code != 200:
-                return []
-            root = ET.fromstring(r.text)
-            headlines = []
-            # Handle both RSS and Atom formats
-            for item in root.iter("item"):
-                title = item.find("title")
-                if title is not None and title.text:
-                    headlines.append(title.text.strip())
-            for entry in root.iter("{http://www.w3.org/2005/Atom}entry"):
-                title = entry.find("{http://www.w3.org/2005/Atom}title")
-                if title is not None and title.text:
-                    headlines.append(title.text.strip())
-            return headlines[:10]
+        http = await get_http()
+        r = await http.get(url, headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code != 200:
+            return []
+        root = ET.fromstring(r.text)
+        headlines = []
+        for item in root.iter("item"):
+            title = item.find("title")
+            if title is not None and title.text:
+                headlines.append(title.text.strip())
+        for entry in root.iter("{http://www.w3.org/2005/Atom}entry"):
+            title = entry.find("{http://www.w3.org/2005/Atom}title")
+            if title is not None and title.text:
+                headlines.append(title.text.strip())
+        return headlines[:10]
     except Exception:
         return []
 
 
 async def get_news_for_market(market_question: str, category: str) -> str:
-    """
-    Get relevant news headlines for a market question.
-    Uses cached RSS data + keyword matching.
-    Returns a string of up to 5 relevant headlines.
-    """
     now = datetime.now(timezone.utc).timestamp()
     cat = category.lower()
 
-    # Pick which feeds to use based on category
     if "sport" in cat or any(w in market_question.lower() for w in
        ["nba", "nfl", "fifa", "epl", "soccer", "football", "basketball",
         "tennis", "golf", "baseball", "nhl", "mls", "ufc", "boxing"]):
@@ -98,12 +122,10 @@ async def get_news_for_market(market_question: str, category: str) -> str:
     else:
         feed_keys = ["general", "sports", "crypto"]
 
-    # Collect all headlines (from cache or fresh fetch)
     all_headlines = []
-    for key in feed_keys:
-        for url in RSS_FEEDS.get(key, []):
+    for key in feed_keys[:1]:
+        for url in RSS_FEEDS.get(key, [])[:2]:
             cache_key = url
-            # Use cache if fresh
             if (cache_key in _news_cache and
                     now - _news_cache_time.get(cache_key, 0) < NEWS_CACHE_TTL):
                 all_headlines.extend(_news_cache[cache_key])
@@ -116,8 +138,7 @@ async def get_news_for_market(market_question: str, category: str) -> str:
     if not all_headlines:
         return "No recent news found."
 
-    # Score headlines by relevance to the market question
-    keywords = [w.lower() for w in market_question.replace("?","").split()
+    keywords = [w.lower() for w in market_question.replace("?", "").split()
                 if len(w) > 3]
 
     def relevance(h: str) -> int:
@@ -126,46 +147,213 @@ async def get_news_for_market(market_question: str, category: str) -> str:
 
     scored = sorted(set(all_headlines), key=relevance, reverse=True)
     top    = [h for h in scored if relevance(h) > 0][:5]
-
     if not top:
-        # No keyword matches — return top general headlines
         top = scored[:3]
 
     return " | ".join(top) if top else "No relevant news found."
 
-
 # ==============================================================================
-#  FLASK DASHBOARD
+#  AIOHTTP WEB SERVER — dashboard + API routes
 # ==============================================================================
-flask_app = Flask(__name__)
+async def _handle_root(request):
+    if os.path.exists("dashboard.html"):
+        return aio_web.FileResponse("dashboard.html")
+    # Inline fallback dashboard if no dashboard.html file present
+    html = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Polymarket Bot Dashboard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         background: #0f1117; color: #e2e8f0; min-height: 100vh; padding: 24px; }
+  h1 { font-size: 22px; font-weight: 600; margin-bottom: 6px; color: #fff; }
+  .subtitle { font-size: 13px; color: #64748b; margin-bottom: 24px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .card { background: #1e2130; border: 1px solid #2d3348; border-radius: 10px; padding: 16px; }
+  .card-label { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+  .card-value { font-size: 24px; font-weight: 600; color: #fff; }
+  .card-value.green { color: #22c55e; }
+  .card-value.red { color: #ef4444; }
+  .section-title { font-size: 14px; font-weight: 600; color: #94a3b8; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 8px 10px; color: #64748b; font-weight: 500; border-bottom: 1px solid #2d3348; }
+  td { padding: 8px 10px; border-bottom: 1px solid #1e2130; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+  .badge.yes { background: #14532d; color: #86efac; }
+  .badge.no  { background: #450a0a; color: #fca5a5; }
+  .badge.open { background: #1e3a5f; color: #93c5fd; }
+  .log-box { background: #1e2130; border: 1px solid #2d3348; border-radius: 10px;
+             padding: 14px; font-family: monospace; font-size: 12px; color: #94a3b8;
+             max-height: 280px; overflow-y: auto; }
+  .log-line { margin-bottom: 3px; line-height: 1.5; }
+  .pnl-pos { color: #22c55e; }
+  .pnl-neg { color: #ef4444; }
+  .refresh-btn { background: #2563eb; color: #fff; border: none; border-radius: 6px;
+                 padding: 8px 16px; font-size: 13px; cursor: pointer; margin-bottom: 20px; }
+  .refresh-btn:hover { background: #1d4ed8; }
+  .updated { font-size: 11px; color: #475569; margin-bottom: 16px; }
+  #positions-table, #trades-table { background: #1e2130; border: 1px solid #2d3348; border-radius: 10px; overflow: hidden; margin-bottom: 24px; }
+</style>
+</head>
+<body>
+<h1>Polymarket AI Bot</h1>
+<p class="subtitle">Paper trading dashboard — auto-refreshes every 30s</p>
+<button class="refresh-btn" onclick="load()">Refresh Now</button>
+<p class="updated" id="updated">Loading...</p>
 
-@flask_app.route("/")
-def dashboard():
-    return send_file("dashboard.html")
+<div class="grid" id="stats"></div>
 
-@flask_app.route("/paper_trades.json")
-def trades():
-    try:
-        return send_file(LOG_FILE)
-    except FileNotFoundError:
-        return jsonify({
-            "balance": PAPER_BALANCE_USDC, "total_pnl": 0.0,
-            "scan_count": 0, "signals_analyzed": 0, "trades_taken": 0,
-            "start_time": datetime.now(timezone.utc).isoformat(),
-            "open_positions": [], "closed_trades": [],
-            "log": ["Bot starting up..."],
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        })
+<div class="section-title">Open Positions</div>
+<div id="positions-table"></div>
 
-@flask_app.route("/health")
-def health():
-    return jsonify({"status": "ok", "bot": "running",
-                    "scans": state.scan_count if 'state' in globals() else 0})
+<div class="section-title">Closed Trades</div>
+<div id="trades-table"></div>
 
-def run_flask():
+<div class="section-title" style="margin-top:24px">Bot Log</div>
+<div class="log-box" id="log"></div>
+
+<script>
+async function load() {
+  try {
+    const r = await fetch('/paper_trades.json?t=' + Date.now());
+    const d = await r.json();
+
+    document.getElementById('updated').textContent =
+      'Last updated: ' + new Date(d.updated_at).toLocaleTimeString();
+
+    const pnlClass = d.total_pnl >= 0 ? 'green' : 'red';
+    const pnlSign  = d.total_pnl >= 0 ? '+' : '';
+    document.getElementById('stats').innerHTML = `
+      <div class="card"><div class="card-label">Balance</div>
+        <div class="card-value">$${d.balance.toFixed(2)}</div></div>
+      <div class="card"><div class="card-label">Total PnL</div>
+        <div class="card-value ${pnlClass}">${pnlSign}$${d.total_pnl.toFixed(2)}</div></div>
+      <div class="card"><div class="card-label">Scans</div>
+        <div class="card-value">${d.scan_count}</div></div>
+      <div class="card"><div class="card-label">Signals</div>
+        <div class="card-value">${d.signals_analyzed}</div></div>
+      <div class="card"><div class="card-label">Trades</div>
+        <div class="card-value">${d.trades_taken}</div></div>
+      <div class="card"><div class="card-label">Open</div>
+        <div class="card-value">${d.open_positions.length}</div></div>
+    `;
+
+    const posHtml = d.open_positions.length === 0
+      ? '<p style="padding:16px;color:#64748b;font-size:13px">No open positions</p>'
+      : `<table><thead><tr>
+           <th>Market</th><th>Side</th><th>Entry</th>
+           <th>Current</th><th>PnL</th><th>Confidence</th>
+         </tr></thead><tbody>${d.open_positions.map(p => {
+           const pnlCls = p.pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+           const pnlStr = (p.pnl >= 0 ? '+' : '') + '$' + p.pnl.toFixed(2);
+           return `<tr>
+             <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                 title="${p.question}">${p.question.slice(0,45)}${p.question.length>45?'...':''}</td>
+             <td><span class="badge ${p.side.toLowerCase()}">${p.side}</span></td>
+             <td>${p.entry_price.toFixed(3)}</td>
+             <td>${p.current_price.toFixed(3)}</td>
+             <td class="${pnlCls}">${pnlStr}</td>
+             <td>${(p.claude_confidence * 100).toFixed(0)}%</td>
+           </tr>`;
+         }).join('')}</tbody></table>`;
+    document.getElementById('positions-table').innerHTML = posHtml;
+
+    const recent = (d.closed_trades || []).slice(-20).reverse();
+    const trdHtml = recent.length === 0
+      ? '<p style="padding:16px;color:#64748b;font-size:13px">No closed trades yet</p>'
+      : `<table><thead><tr>
+           <th>Market</th><th>Side</th><th>Entry</th>
+           <th>Close</th><th>PnL</th><th>Closed At</th>
+         </tr></thead><tbody>${recent.map(p => {
+           const pnlCls = p.pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+           const pnlStr = (p.pnl >= 0 ? '+' : '') + '$' + p.pnl.toFixed(2);
+           const closeTime = p.close_time ? new Date(p.close_time).toLocaleTimeString() : '-';
+           return `<tr>
+             <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                 title="${p.question}">${p.question.slice(0,45)}${p.question.length>45?'...':''}</td>
+             <td><span class="badge ${p.side.toLowerCase()}">${p.side}</span></td>
+             <td>${p.entry_price.toFixed(3)}</td>
+             <td>${(p.close_price||0).toFixed(3)}</td>
+             <td class="${pnlCls}">${pnlStr}</td>
+             <td>${closeTime}</td>
+           </tr>`;
+         }).join('')}</tbody></table>`;
+    document.getElementById('trades-table').innerHTML = trdHtml;
+
+    const logLines = (d.log || []).slice().reverse();
+    document.getElementById('log').innerHTML =
+      logLines.map(l => `<div class="log-line">${l}</div>`).join('') ||
+      '<div class="log-line">No log entries yet.</div>';
+
+  } catch(e) {
+    document.getElementById('updated').textContent = 'Error loading data: ' + e.message;
+  }
+}
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>"""
+    return aio_web.Response(text=html, content_type="text/html")
+
+
+async def _handle_trades(request):
+    if os.path.exists(LOG_FILE):
+        return aio_web.FileResponse(LOG_FILE)
+    return aio_web.json_response({
+        "balance":          PAPER_BALANCE_USDC,
+        "total_pnl":        0.0,
+        "scan_count":       0,
+        "signals_analyzed": 0,
+        "trades_taken":     0,
+        "start_time":       datetime.now(timezone.utc).isoformat(),
+        "open_positions":   [],
+        "closed_trades":    [],
+        "log":              ["Bot starting up..."],
+        "updated_at":       datetime.now(timezone.utc).isoformat(),
+    })
+
+
+async def _handle_health(request):
+    open_count = sum(1 for p in state.positions if p.status == "OPEN")
+    return aio_web.json_response({
+        "status":           "ok",
+        "bot":              "running",
+        "scans":            state.scan_count,
+        "open_positions":   open_count,
+        "balance":          round(state.balance, 2),
+        "total_pnl":        round(state.total_pnl, 2),
+    })
+
+
+async def start_web():
+    app = aio_web.Application()
+    app.router.add_get("/",                  _handle_root)
+    app.router.add_get("/paper_trades.json", _handle_trades)
+    app.router.add_get("/health",            _handle_health)
+    runner = aio_web.AppRunner(app)
+    await runner.setup()
     port = int(os.getenv("PORT", 8080))
-    flask_app.run(host="0.0.0.0", port=port)
+    await aio_web.TCPSite(runner, "0.0.0.0", port).start()
+    log_event(f"Dashboard running on port {port}")
 
+# ==============================================================================
+#  SELF-PING — keeps Render web service awake (pings /health every 10 min)
+# ==============================================================================
+async def self_ping():
+    await asyncio.sleep(90)  # wait for server + first scan to complete
+    port = int(os.getenv("PORT", 8080))
+    while True:
+        try:
+            http = await get_http()
+            await http.get(f"http://localhost:{port}/health")
+            log_event("[PING] Keep-alive ping sent")
+        except Exception as e:
+            log_event(f"[PING ERROR] {e}")
+        await asyncio.sleep(600)  # every 10 minutes
 
 # ==============================================================================
 #  DATA MODELS
@@ -214,65 +402,85 @@ class BotState:
 
 state = BotState()
 
+# ==============================================================================
+#  MEMORY PRUNING — called after every scan cycle
+# ==============================================================================
+def prune_memory():
+    if len(state.log) > 80:
+        state.log = state.log[-80:]
+
+    open_pos   = [p for p in state.positions if p.status == "OPEN"]
+    closed_pos = [p for p in state.positions if p.status == "CLOSED"][-10:]
+    state.positions = open_pos + closed_pos
+
+    if len(state.closed_trades) > 30:
+        state.closed_trades = state.closed_trades[-30:]
+
+    now = datetime.now(timezone.utc).timestamp()
+    stale_keys = [k for k, t in _news_cache_time.items()
+                  if now - t > NEWS_CACHE_TTL * 2]
+    for k in stale_keys:
+        _news_cache.pop(k, None)
+        _news_cache_time.pop(k, None)
 
 # ==============================================================================
 #  POLYMARKET GAMMA API
 # ==============================================================================
 async def fetch_markets(limit: int = 50) -> list[Market]:
     try:
-        async with httpx.AsyncClient(timeout=15) as http:
-            r = await http.get(
-                f"{GAMMA_API}/markets",
-                params={
-                    "active":    "true",
-                    "closed":    "false",
-                    "limit":     limit,
-                    "order":     "volume24hr",
-                    "ascending": "false",
-                }
-            )
-            r.raise_for_status()
-            items = r.json()
-            if not isinstance(items, list):
-                items = items.get("markets", [])
+        http = await get_http()
+        r = await http.get(
+            f"{GAMMA_API}/markets",
+            params={
+                "active":    "true",
+                "closed":    "false",
+                "limit":     limit,
+                "order":     "volume24hr",
+                "ascending": "false",
+            }
+        )
+        r.raise_for_status()
+        items = r.json()
+        if not isinstance(items, list):
+            items = items.get("markets", [])
 
-            markets = []
-            for m in items:
-                try:
-                    op  = m.get("outcomePrices")
-                    out = m.get("outcomes", '["Yes","No"]')
-                    if op:
-                        prices   = json.loads(op)  if isinstance(op,  str) else op
-                        outcomes = json.loads(out) if isinstance(out, str) else out
-                        yi = next((i for i, o in enumerate(outcomes) if o.lower() in ("yes","true")),  0)
-                        ni = next((i for i, o in enumerate(outcomes) if o.lower() in ("no","false")),  1)
-                        yes_p, no_p = float(prices[yi]), float(prices[ni])
-                    else:
-                        toks  = m.get("tokens", [])
-                        y_tok = next((t for t in toks if str(t.get("outcome","")).upper() == "YES"), None)
-                        n_tok = next((t for t in toks if str(t.get("outcome","")).upper() == "NO"),  None)
-                        if not y_tok or not n_tok:
-                            continue
-                        yes_p, no_p = float(y_tok["price"]), float(n_tok["price"])
-
-                    if yes_p <= 0 or no_p <= 0:
+        markets = []
+        for m in items:
+            try:
+                op  = m.get("outcomePrices")
+                out = m.get("outcomes", '["Yes","No"]')
+                if op:
+                    prices   = json.loads(op)  if isinstance(op,  str) else op
+                    outcomes = json.loads(out) if isinstance(out, str) else out
+                    yi = next((i for i, o in enumerate(outcomes) if o.lower() in ("yes", "true")),  0)
+                    ni = next((i for i, o in enumerate(outcomes) if o.lower() in ("no", "false")),  1)
+                    yes_p, no_p = float(prices[yi]), float(prices[ni])
+                else:
+                    toks  = m.get("tokens", [])
+                    y_tok = next((t for t in toks if str(t.get("outcome", "")).upper() == "YES"), None)
+                    n_tok = next((t for t in toks if str(t.get("outcome", "")).upper() == "NO"),  None)
+                    if not y_tok or not n_tok:
                         continue
+                    yes_p, no_p = float(y_tok["price"]), float(n_tok["price"])
 
-                    markets.append(Market(
-                        id          = str(m.get("id") or m.get("conditionId", "")),
-                        question    = m.get("question", ""),
-                        yes_price   = yes_p,
-                        no_price    = no_p,
-                        volume      = float(m.get("volume24hr") or m.get("volume") or 0),
-                        end_date    = m.get("endDate", ""),
-                        category    = m.get("category", "misc"),
-                        description = (m.get("description") or "")[:400],
-                    ))
-                except Exception:
+                if yes_p <= 0 or no_p <= 0:
                     continue
 
-            log_event(f"[API] Fetched {len(markets)} markets from Gamma API")
-            return markets
+                markets.append(Market(
+                    id          = str(m.get("id") or m.get("conditionId", "")),
+                    question    = m.get("question", ""),
+                    yes_price   = yes_p,
+                    no_price    = no_p,
+                    volume      = float(m.get("volume24hr") or m.get("volume") or 0),
+                    end_date    = m.get("endDate", ""),
+                    category    = m.get("category", "misc"),
+                    description = (m.get("description") or "")[:400],
+                ))
+            except Exception:
+                continue
+
+        log_event(f"[API] Fetched {len(markets)} markets from Gamma API")
+        return markets
 
     except Exception as e:
         log_event(f"[API ERROR] {e} -- using mock data")
@@ -303,9 +511,8 @@ def _mock_markets() -> list[Market]:
         for i, (q, yp, np, vol, cat) in enumerate(base)
     ]
 
-
 # ==============================================================================
-#  REPLICATE  /  LLAMA 3 70B  +  NEWS CONTEXT
+#  REPLICATE / LLAMA 3 70B
 # ==============================================================================
 async def call_replicate_llama(prompt: str) -> str:
     system = (
@@ -335,7 +542,8 @@ async def call_replicate_llama(prompt: str) -> str:
     }
     url = REPLICATE_API_URL.format(model=REPLICATE_MODEL)
 
-    async with httpx.AsyncClient(timeout=60) as http:
+    # Separate client with longer timeout — avoids polluting shared pool
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as http:
         r = await http.post(url, headers=headers, json=payload)
         r.raise_for_status()
         result = r.json()
@@ -346,6 +554,7 @@ async def call_replicate_llama(prompt: str) -> str:
         if isinstance(output, str):
             return output.strip()
 
+        # Fall back to polling if "Prefer: wait" wasn't honoured
         poll_url = result.get("urls", {}).get("get", "")
         if not poll_url:
             raise ValueError(f"No output and no poll URL: {result}")
@@ -365,11 +574,6 @@ async def call_replicate_llama(prompt: str) -> str:
 
 
 async def analyse_market(market: Market) -> Optional[dict]:
-    """
-    Analyse a market using Llama + fresh RSS news context.
-    News is fetched for free from public RSS feeds.
-    """
-    # Fetch relevant news headlines (free, no API key)
     news = await get_news_for_market(market.question, market.category)
     log_event(f"[NEWS] {market.question[:40]} -> {news[:80]}...")
 
@@ -406,7 +610,6 @@ async def analyse_market(market: Market) -> Optional[dict]:
         reasoning = data.get("reasoning", "")
         dq        = data.get("data_quality", "MEDIUM")
 
-        # Boost confidence when news is relevant (data_quality HIGH)
         if dq == "HIGH":
             conf = min(conf + 0.05, 0.99)
 
@@ -426,7 +629,6 @@ async def analyse_market(market: Market) -> Optional[dict]:
         log_event(f"[LLM ERROR] {market.question[:45]}: {e}")
         return None
 
-
 # ==============================================================================
 #  SPREAD ARBITRAGE
 # ==============================================================================
@@ -437,7 +639,6 @@ def detect_mispricing(market: Market) -> Optional[dict]:
         side = "YES" if market.yes_price < market.no_price else "NO"
         return {"type": "spread_arb", "gap": gap, "side": side}
     return None
-
 
 # ==============================================================================
 #  RISK MANAGER
@@ -453,11 +654,8 @@ def risk_check(edge: float, confidence: float, market: Market) -> tuple[bool, st
         return False, f"Confidence {confidence:.2f} too low"
     if market.volume < 30_000:
         return False, f"Volume ${market.volume:,.0f} below $30k minimum"
-
-    # Block near-zero and near-certain markets
     if market.yes_price < 0.05 or market.yes_price > 0.95:
         return False, f"Price {market.yes_price:.3f} too extreme -- skipping"
-
     if market.id in {p.market_id for p in open_positions}:
         return False, "Already have open position in this market"
 
@@ -469,7 +667,6 @@ def position_size(edge: float, confidence: float) -> float:
     return min(state.balance * kelly,
                state.balance * MAX_POSITION_PCT,
                state.balance * 0.05)
-
 
 # ==============================================================================
 #  PAPER EXECUTION
@@ -532,11 +729,10 @@ def _close(pos: Position, price: float, reason: str):
     state.closed_trades.append(asdict(pos))
     log_event(f"[CLOSE/{reason}] {pos.question[:45]} | PnL=${pos.pnl:+.2f} price={price:.3f}")
 
-
 # ==============================================================================
-#  STATE PERSISTENCE
+#  STATE PERSISTENCE — pushed to thread pool to avoid blocking event loop
 # ==============================================================================
-def save_state():
+def _write_state():
     with open(LOG_FILE, "w", encoding="utf-8") as f:
         json.dump({
             "balance":          state.balance,
@@ -552,12 +748,17 @@ def save_state():
         }, f, indent=2, ensure_ascii=False)
 
 
+async def save_state():
+    await asyncio.to_thread(_write_state)
+
+
 def log_event(msg: str):
     ts    = datetime.now(timezone.utc).strftime("%H:%M:%S")
     entry = f"[{ts}] {msg}"
     state.log.append(entry)
+    if len(state.log) > 80:
+        state.log = state.log[-80:]
     print(entry)
-
 
 # ==============================================================================
 #  MAIN SCAN LOOP
@@ -571,25 +772,18 @@ async def scan_cycle():
 
     open_ids = {p.market_id for p in state.positions if p.status == "OPEN"}
 
-    # Polymarket returns "misc" for most categories, so we filter by
-    # question keywords instead of the unreliable category field.
     def question_allowed(q: str) -> bool:
-        """Allow sports, crypto, politics, finance based on question text."""
         t = q.lower()
         return any(kw in t for kw in [
-            # sports
             "win", "nba", "nfl", "fifa", "epl", "soccer", "football",
             "basketball", "tennis", "golf", "cricket", "ufc", "boxing",
             "baseball", "hockey", "mls", "championship", "league", "cup",
             "match", "game", "season", "playoff", "finals", "tournament",
-            # crypto
             "bitcoin", "btc", "ethereum", "eth", "crypto", "solana",
             "coinbase", "binance", "blockchain", "defi", "nft",
-            # politics
             "president", "election", "vote", "prime minister", "senate",
             "congress", "trump", "policy", "war", "ceasefire", "iran",
             "ukraine", "china", "russia", "tariff",
-            # finance
             "fed", "rate", "inflation", "gdp", "stock", "market",
             "nasdaq", "s&p", "recession", "oil", "gold",
         ])
@@ -602,15 +796,15 @@ async def scan_cycle():
             and question_allowed(m.question)
         ],
         key=lambda m: m.volume, reverse=True
-    )[:12]
+    )[:5]
 
-    log_event(f"[SCAN] {len(candidates)} candidates (keyword filter on question)")
+    log_event(f"[SCAN] {len(candidates)} candidates")
 
     for market in candidates:
         state.signals_analyzed += 1
 
         arb    = detect_mispricing(market)
-        signal = await analyse_market(market)  # now includes RSS news context
+        signal = await analyse_market(market)
 
         if not signal:
             continue
@@ -618,7 +812,7 @@ async def scan_cycle():
         if arb:
             signal["edge"]       = max(signal["edge"], arb["gap"] * 0.5)
             signal["confidence"] = min(signal["confidence"] + 0.1, 0.95)
-            log_event(f"[ARB] Spread anomaly detected on {market.question[:40]}")
+            log_event(f"[ARB] Spread anomaly on {market.question[:40]}")
 
         allow, reason = risk_check(signal["edge"], signal["confidence"], market)
         if not allow:
@@ -628,21 +822,26 @@ async def scan_cycle():
         open_position(market, signal)
         await asyncio.sleep(1)
 
-    save_state()
+    prune_memory()
+    await save_state()
     log_event(
         f"Balance: ${state.balance:.2f} | "
         f"PnL: ${state.total_pnl:+.2f} | "
         f"Open: {sum(1 for p in state.positions if p.status == 'OPEN')}"
     )
 
-
+# ==============================================================================
+#  BOT LOOP
+# ==============================================================================
 async def bot_loop():
+    await start_web()
+    asyncio.create_task(self_ping())  # keeps Render web service awake
+
     log_event("Polymarket AI Paper Trading Bot started")
     log_event(f"LLM    : Replicate -> {REPLICATE_MODEL}")
     log_event(f"Balance: ${state.balance:.2f} USDC (PAPER)")
-    log_event(f"Strategy: Llama 3 70B + RSS News + Sports Focus")
-    log_event(f"Min edge: {MIN_EDGE_PCT:.0%} | Max positions: {MAX_OPEN_POSITIONS}")
-    log_event("Category filter: keyword-based on question text")
+    log_event(f"Scan interval: {SCAN_INTERVAL}s | Max positions: {MAX_OPEN_POSITIONS}")
+    log_event(f"Candidates per scan: 5 | RSS feeds per market: 2")
     log_event("-" * 60)
 
     while True:
@@ -652,12 +851,8 @@ async def bot_loop():
             log_event(f"[LOOP ERROR] {e}")
         await asyncio.sleep(SCAN_INTERVAL)
 
-
 # ==============================================================================
 #  ENTRY POINT
 # ==============================================================================
 if __name__ == "__main__":
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    log_event(f"Dashboard running on port {os.getenv('PORT', 8080)}")
     asyncio.run(bot_loop())

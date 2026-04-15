@@ -2,3 +2,4 @@ httpx
 flask
 gunicorn
 python-dotenv
+aiohttp
