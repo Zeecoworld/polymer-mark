@@ -536,9 +536,7 @@ async def _slack_alert(msg: str):
         log_event(f"[ALERT] Slack failed: {e}")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  DATA MODELS
-# ──────────────────────────────────────────────────────────────────────────────
+
 @dataclass
 class Market:
     id:           str
@@ -591,10 +589,7 @@ class BotState:
 state = BotState()
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  STATE PERSISTENCE — load on startup, save after every scan
-#  Priority: Redis → JSON file → fresh start
-# ──────────────────────────────────────────────────────────────────────────────
+
 def load_saved_state():
     """
     Restore full state on startup.
@@ -725,9 +720,6 @@ def prune_memory():
     open_pos   = [p for p in state.positions if p.status == "OPEN"]
     closed_pos = [p for p in state.positions if p.status == "CLOSED"][-20:]
     state.positions = open_pos + closed_pos
-    # IMPORTANT: do NOT recalculate total_pnl here
-    # total_pnl is maintained incrementally in _close_position()
-    # and restored from Redis/JSON on restart — never recomputed from pruned list
     if len(state.closed_trades) > 500:
         state.closed_trades = state.closed_trades[-500:]
     now   = datetime.now(timezone.utc).timestamp()
@@ -935,20 +927,36 @@ async def analyse_market_llm_only(market: Market) -> Optional[dict]:
         if s == -1 or e <= s: return None
         data = json.loads(text[s:e])
         true_prob = float(data.get("true_prob_yes", market.yes_price))
-        conf      = float(data.get("confidence", 0.4))
+        conf      = float(data.get("confidence", 0.5))
+
+        # ── Calibration penalties — loosened for paper trading ──
+        # Previously ALL penalties stacked making conf always end at ~0.35
+        # Now each penalty is softer and they don't compound below floor
+
+        # Penalty 1: no breaking news → cap at 0.65 (was 0.50 — too harsh)
         if not data.get("has_breaking_news", False):
-            conf = min(conf, 0.50)
+            conf = min(conf, 0.65)
+
+        # Penalty 2: news doesn't directly answer → shrink estimate + soft cap
+        # Only apply ONE of the two penalties, not both stacked
         if not data.get("news_directly_answers_question", False):
-            true_prob = market.yes_price + (true_prob - market.yes_price) * 0.25
-            conf = min(conf, 0.45)
-        if market.volume > 1_000_000:   conf = max(conf - 0.10, 0.01)
-        elif market.volume > 500_000:   conf = max(conf - 0.05, 0.01)
+            true_prob = market.yes_price + (true_prob - market.yes_price) * 0.50  # was 0.25
+            conf = min(conf, 0.60)  # was 0.45 — this alone was killing trades
+
+        # Penalty 3: high-volume efficiency penalty (halved — volume alone shouldn't block)
+        if market.volume > 1_000_000:
+            conf = max(conf - 0.05, 0.30)   # was -0.10, floor was 0.01
+        elif market.volume > 500_000:
+            conf = max(conf - 0.03, 0.30)   # was -0.05
+
+        # Penalty 4: close to resolution
         try:
             end = datetime.fromisoformat(market.end_date.replace("Z", "+00:00"))
             if (end - datetime.now(timezone.utc)).days < 3:
-                conf = max(conf - 0.15, 0.01)
+                conf = max(conf - 0.10, 0.30)   # was -0.15
         except Exception:
             pass
+
         return {"true_prob": max(0.01,min(0.99,true_prob)), "confidence": max(0.01,min(0.99,conf)),
                 "reasoning": data.get("reasoning",""), "source": "llm"}
     except Exception as e:
@@ -971,12 +979,12 @@ async def analyse_market(market: Market) -> Optional[dict]:
     signals = []
 
     llm_result = await analyse_market_llm_only(market)
-    if llm_result and llm_result["confidence"] >= 0.45:
+    if llm_result and llm_result["confidence"] >= 0.40:  # was 0.45 — too high after penalties
         edge_yes = llm_result["true_prob"] - market.yes_price
         edge_no  = (1 - llm_result["true_prob"]) - market.no_price
         side = "YES" if edge_yes >= edge_no else "NO"
         edge = edge_yes if side == "YES" else edge_no
-        if abs(edge) > 0.04:
+        if abs(edge) > 0.03:   # was 0.04 — lowered to catch more real edges
             signals.append({"source":"llm","side":side,"edge":edge,
                             "confidence":llm_result["confidence"],"weight":0.50,
                             "reasoning":llm_result.get("reasoning","")})
@@ -1001,16 +1009,36 @@ async def analyse_market(market: Market) -> Optional[dict]:
     dominant = yes_sigs if len(yes_sigs) >= len(no_sigs) else no_sigs
     side = "YES" if dominant is yes_sigs else "NO"
 
-    if len(dominant) < 2 and not any(s["confidence"] >= 0.70 for s in dominant):
-        log_event(f"[SKIP] Only {len(dominant)} signal on {side} — need 2+ or conf ≥ 0.70")
+    # ── Signal agreement: relaxed for paper trading ──
+    # Old rule: needed 2+ signals OR conf ≥ 0.70
+    # Problem: momentum needs 3+ scans to warm up, arb is rare on liquid markets
+    # So LLM was the only signal but 1 signal always got rejected
+    # New rule: 1 strong LLM signal (conf ≥ 0.52) is enough to proceed
+    # 2+ signals still get a confidence boost (reward for agreement)
+    if len(dominant) == 0:
         return None
+
+    if len(dominant) == 1:
+        solo = dominant[0]
+        if solo["confidence"] < 0.52:
+            log_event(f"[SKIP] Solo signal conf={solo['confidence']:.2f} < 0.52 for {market.question[:40]}")
+            return None
+        # Solo signal passes — log it clearly
+        log_event(f"[SIGNAL] Solo {solo['source']} signal accepted conf={solo['confidence']:.2f}")
+    else:
+        # Multi-signal agreement — boost confidence by 8%
+        for s in dominant:
+            s["confidence"] = min(s["confidence"] + 0.08, 0.95)
+        log_event(f"[SIGNAL] {len(dominant)}-signal agreement — confidence boosted")
 
     total_w  = sum(s["weight"] for s in dominant)
     avg_conf = sum(s["confidence"]*s["weight"] for s in dominant) / total_w
     avg_edge = sum(s["edge"]*s["weight"]       for s in dominant) / total_w
 
-    if avg_conf * avg_edge < 0.04:
-        log_event(f"[SKIP] Composite {avg_conf*avg_edge:.4f} too low for {market.question[:40]}")
+    # Composite gate — lowered from 0.04 to 0.025 for paper mode
+    # 0.04 was too high: e.g. conf=0.55 × edge=0.06 = 0.033 → rejected
+    if avg_conf * avg_edge < 0.025:
+        log_event(f"[SKIP] Composite {avg_conf*avg_edge:.4f} too low (need ≥ 0.025) for {market.question[:40]}")
         return None
 
     sources  = "+".join(sorted({s["source"] for s in dominant}))
@@ -1030,7 +1058,9 @@ def risk_check(edge: float, confidence: float, market: Market) -> tuple[bool, st
     open_pos = [p for p in state.positions if p.status == "OPEN"]
     if len(open_pos) >= MAX_OPEN_POSITIONS:  return False, f"Max positions ({MAX_OPEN_POSITIONS}) reached"
     if edge < MIN_EDGE_PCT:                  return False, f"Edge {edge:.3f} below min {MIN_EDGE_PCT}"
-    if confidence < 0.50:                    return False, f"Confidence {confidence:.2f} too low (need ≥ 0.50)"
+    # Lowered from 0.50 → 0.45 — calibration penalties already pushed conf down
+    # 0.50 was rejecting every trade that had even one penalty applied
+    if confidence < 0.45:                    return False, f"Confidence {confidence:.2f} too low (need ≥ 0.45)"
     if market.volume < 50_000:               return False, f"Volume ${market.volume:,.0f} below $50k floor"
     if market.yes_price < 0.05 or market.yes_price > 0.95: return False, f"Price {market.yes_price:.3f} too extreme"
     if market.condition_id in {p.condition_id for p in open_pos}: return False, "Already have position"
@@ -1190,10 +1220,11 @@ async def scan_cycle():
         state.signals_analyzed += 1
         signal = await analyse_market(market)
         if not signal:
+            # signal=None means it was rejected inside analyse_market — already logged there
             continue
         allow, reason = risk_check(signal["edge"], signal["confidence"], market)
         if not allow:
-            log_event(f"[SKIP] {market.question[:45]} — {reason}")
+            log_event(f"[SKIP] {market.question[:45]} — {reason} (edge={signal['edge']:.3f} conf={signal['confidence']:.2f})")
             continue
         await open_position(market, signal)
         await asyncio.sleep(2)
