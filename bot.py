@@ -920,6 +920,7 @@ async def analyse_market_llm_only(market: Market) -> Optional[dict]:
     )
     try:
         text = await call_replicate_llama(prompt)
+        log_event(f"[LLM RAW] {text[:100]}")
         if "```" in text:
             text = text.split("```")[1]
             if text.startswith("json"): text = text[4:]
@@ -961,6 +962,7 @@ async def analyse_market_llm_only(market: Market) -> Optional[dict]:
                 "reasoning": data.get("reasoning",""), "source": "llm"}
     except Exception as e:
         log_event(f"[LLM ERROR] {market.question[:45]}: {e}")
+        log_event(f"[LLM RAW] {text[:120] if 'text' in dir() else 'no response'}")
         return None
 
 
