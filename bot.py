@@ -909,7 +909,7 @@ async def analyse_market_llm_only(market: Market) -> Optional[dict]:
         f"Current YES price: {market.yes_price:.3f} (market says {market.yes_price*100:.1f}% chance)\n"
         f"Current NO price: {market.no_price:.3f}\n24h Volume: ${market.volume:,.0f}\n"
         f"Description: {market.description or 'N/A'}\nRecent news:\n{news}\n\n"
-        "RULES:\n1. High volume (>$500k) = efficient market. Only deviate with STRONG specific evidence.\n"
+        "1. Look for markets where recent news gives you genuine reason to disagree with the crowd.\n"
         "2. Vague news = stay near market price.\n3. Close to resolution (<3 days) = market is usually right.\n"
         "4. Edge must come from specific recent news, not guessing.\n\n"
         "Respond ONLY with this JSON:\n"
@@ -981,7 +981,7 @@ async def analyse_market(market: Market) -> Optional[dict]:
     signals = []
 
     llm_result = await analyse_market_llm_only(market)
-    if llm_result and llm_result["confidence"] >= 0.40:  # was 0.45 — too high after penalties
+    if llm_result and llm_result["confidence"] >= 0.30:  # was 0.45 — too high after penalties
         edge_yes = llm_result["true_prob"] - market.yes_price
         edge_no  = (1 - llm_result["true_prob"]) - market.no_price
         side = "YES" if edge_yes >= edge_no else "NO"
@@ -1062,7 +1062,7 @@ def risk_check(edge: float, confidence: float, market: Market) -> tuple[bool, st
     if edge < MIN_EDGE_PCT:                  return False, f"Edge {edge:.3f} below min {MIN_EDGE_PCT}"
     # Lowered from 0.50 → 0.45 — calibration penalties already pushed conf down
     # 0.50 was rejecting every trade that had even one penalty applied
-    if confidence < 0.45:                    return False, f"Confidence {confidence:.2f} too low (need ≥ 0.45)"
+    if confidence < 0.35:                    return False, f"Confidence {confidence:.2f} too low (need ≥ 0.45)"
     if market.volume < 50_000:               return False, f"Volume ${market.volume:,.0f} below $50k floor"
     if market.yes_price < 0.05 or market.yes_price > 0.95: return False, f"Price {market.yes_price:.3f} too extreme"
     if market.condition_id in {p.condition_id for p in open_pos}: return False, "Already have position"
@@ -1212,8 +1212,13 @@ async def scan_cycle():
         ])
 
     candidates = sorted(
-        [m for m in markets if m.condition_id not in open_cids and m.volume > 50_000 and question_allowed(m.question)],
-        key=lambda m: m.volume, reverse=True,
+    [m for m in markets
+     if m.condition_id not in open_cids
+     and m.volume > 50_000
+     and m.yes_price >= 0.15   
+     and m.yes_price <= 0.85 
+     and question_allowed(m.question)],
+    key=lambda m: m.volume, reverse=True,
     )[:6]
 
     log_event(f"[SCAN] {len(candidates)} candidates from {len(markets)} markets")
