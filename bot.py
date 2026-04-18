@@ -396,8 +396,12 @@ async def ws_price_feed():
                         msg = json.loads(raw)
                     except Exception:
                         continue
+
+                    if isinstance(msg, list):
+                        msg = msg[0] if msg else {}
+
                     event_type = msg.get("event_type", "")
-                    asset_id = msg.get("asset_id", "")
+                    asset_id   = msg.get("asset_id", "")
                     if event_type == "last_trade_price" and asset_id:
                         price = msg.get("price")
                         if price:
