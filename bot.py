@@ -736,7 +736,7 @@ def prune_memory():
 # ──────────────────────────────────────────────────────────────────────────────
 #  GAMMA API — MARKET FETCHING
 # ──────────────────────────────────────────────────────────────────────────────
-async def fetch_markets(limit: int = 50) -> list[Market]:
+async def fetch_markets(limit: int = 200) -> list[Market]:
     try:
         http = await get_http()
         r = await http.get(f"{GAMMA_API}/markets", params={
@@ -1181,7 +1181,7 @@ async def scan_cycle():
     state.scan_count += 1
     log_event(f"── Scan #{state.scan_count} [{'LIVE' if LIVE_MODE else 'PAPER'}] " + "─" * 30)
 
-    markets = await fetch_markets(50)
+    markets = await fetch_markets(200)
     await update_positions(markets)
 
     open_cids = {p.condition_id for p in state.positions if p.status == "OPEN"}
@@ -1212,7 +1212,7 @@ async def scan_cycle():
      and m.yes_price >= 0.10
      and m.yes_price <= 0.90],     
     key=lambda m: m.volume, reverse=True,
-)[:10]
+)[:25]
 
     log_event(f"[SCAN] {len(candidates)} candidates from {len(markets)} markets")
 
