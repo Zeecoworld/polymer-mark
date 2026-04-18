@@ -87,9 +87,10 @@ CLOB_MIN_ORDER_SIZE    = 5.0
 # Risk
 PAPER_BALANCE_USDC     = float(os.getenv("PAPER_BALANCE", "1000.0"))
 SCAN_INTERVAL          = int(os.getenv("SCAN_INTERVAL", "120"))
-MAX_POSITION_PCT       = float(os.getenv("MAX_POSITION_PCT", "0.05"))
-MIN_EDGE_PCT = float(os.getenv("MIN_EDGE_PCT", "0.02"))
+MAX_POSITION_PCT       = float(os.getenv("MAX_POSITION_PCT", "0.05"))   # was 0.02 — too small
+MIN_EDGE_PCT           = float(os.getenv("MIN_EDGE_PCT", "0.02"))       # was 0.05 — blocked all trades
 MAX_OPEN_POSITIONS     = int(os.getenv("MAX_OPEN_POSITIONS", "3"))
+COOLDOWN_SECONDS       = int(os.getenv("COOLDOWN_SECONDS", "3600"))     # 1hr cooldown after loss
 
 # Alerts
 TELEGRAM_TOKEN         = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -396,12 +397,8 @@ async def ws_price_feed():
                         msg = json.loads(raw)
                     except Exception:
                         continue
-
-                    if isinstance(msg, list):
-                        msg = msg[0] if msg else {}
-
                     event_type = msg.get("event_type", "")
-                    asset_id   = msg.get("asset_id", "")
+                    asset_id = msg.get("asset_id", "")
                     if event_type == "last_trade_price" and asset_id:
                         price = msg.get("price")
                         if price:
@@ -592,6 +589,11 @@ class BotState:
 
 state = BotState()
 
+# ── Recently closed market cooldown ──
+# Prevents bot from reopening the same losing market immediately after stop loss
+# Key: condition_id, Value: timestamp of close
+_recently_closed: dict[str, float] = {}
+
 
 
 def load_saved_state():
@@ -736,7 +738,7 @@ def prune_memory():
 # ──────────────────────────────────────────────────────────────────────────────
 #  GAMMA API — MARKET FETCHING
 # ──────────────────────────────────────────────────────────────────────────────
-async def fetch_markets(limit: int = 200) -> list[Market]:
+async def fetch_markets(limit: int = 50) -> list[Market]:
     try:
         http = await get_http()
         r = await http.get(f"{GAMMA_API}/markets", params={
@@ -1054,12 +1056,19 @@ def risk_check(edge: float, confidence: float, market: Market) -> tuple[bool, st
     open_pos = [p for p in state.positions if p.status == "OPEN"]
     if len(open_pos) >= MAX_OPEN_POSITIONS:  return False, f"Max positions ({MAX_OPEN_POSITIONS}) reached"
     if edge < MIN_EDGE_PCT:                  return False, f"Edge {edge:.3f} below min {MIN_EDGE_PCT}"
-    # Lowered from 0.50 → 0.45 — calibration penalties already pushed conf down
-    # 0.50 was rejecting every trade that had even one penalty applied
-    if confidence < 0.32:                    return False, f"Confidence {confidence:.2f} too low (need ≥ 0.45)"
-    if market.volume < 10_000: return False, f"Volume ${market.volume:,.0f} below $10k floor"
-    if market.yes_price < 0.05 or market.yes_price > 0.95: return False, f"Price {market.yes_price:.3f} too extreme"
-    if market.condition_id in {p.condition_id for p in open_pos}: return False, "Already have position"
+    if confidence < 0.32:                    return False, f"Confidence {confidence:.2f} too low (need ≥ 0.32)"
+    if market.volume < 10_000:               return False, f"Volume ${market.volume:,.0f} below $10k floor"
+    # Tightened price range — avoids high-priced NO positions that hit stop loss instantly
+    if market.yes_price < 0.15 or market.yes_price > 0.85:
+        return False, f"Price {market.yes_price:.3f} outside safe range 0.15–0.85"
+    if market.condition_id in {p.condition_id for p in open_pos}:
+        return False, "Already have position"
+    # Double-check cooldown — prevents re-entry even if candidate filter was bypassed
+    now_ts = datetime.now(timezone.utc).timestamp()
+    closed_ts = _recently_closed.get(market.condition_id, 0)
+    if now_ts - closed_ts < COOLDOWN_SECONDS:
+        mins_left = int((COOLDOWN_SECONDS - (now_ts - closed_ts)) / 60)
+        return False, f"Market on cooldown — {mins_left} min remaining"
     if LIVE_MODE:
         sz = position_size(edge, confidence)
         if sz < CLOB_MIN_ORDER_SIZE: return False, f"Size ${sz:.2f} below CLOB minimum"
@@ -1162,6 +1171,9 @@ async def _close_position(pos: Position, price: float, reason: str):
     state.total_pnl = round(state.total_pnl + pos.pnl, 4)
     state.closed_trades.append(asdict(pos))
 
+    # ── Record cooldown to prevent re-entering same losing market ──
+    _recently_closed[pos.condition_id] = datetime.now(timezone.utc).timestamp()
+
     mode = "LIVE" if (LIVE_MODE and pos.order_id) else "PAPER"
     log_event(f"[{mode} CLOSE/{reason}] {pos.question[:45]} | PnL=${pos.pnl:+.2f} entry={pos.entry_price:.3f} close={price:.3f}")
 
@@ -1181,7 +1193,7 @@ async def scan_cycle():
     state.scan_count += 1
     log_event(f"── Scan #{state.scan_count} [{'LIVE' if LIVE_MODE else 'PAPER'}] " + "─" * 30)
 
-    markets = await fetch_markets(200)
+    markets = await fetch_markets(50)
     await update_positions(markets)
 
     open_cids = {p.condition_id for p in state.positions if p.status == "OPEN"}
@@ -1205,14 +1217,24 @@ async def scan_cycle():
             "release","launch","announce","chipset","nvidia","nvda","regulation","ban","lawsuit",
         ])
 
+    # Build cooldown blacklist — skip markets closed in last hour (prevents repeat losses)
+    now_ts = datetime.now(timezone.utc).timestamp()
+    on_cooldown = {
+        cid for cid, ts in _recently_closed.items()
+        if now_ts - ts < COOLDOWN_SECONDS
+    }
+    if on_cooldown:
+        log_event(f"[COOLDOWN] {len(on_cooldown)} market(s) skipped — on 1hr cooldown")
+
     candidates = sorted(
-    [m for m in markets
-     if m.condition_id not in open_cids
-     and m.volume > 10_000
-     and m.yes_price >= 0.10
-     and m.yes_price <= 0.90],     
-    key=lambda m: m.volume, reverse=True,
-)[:25]
+        [m for m in markets
+         if m.condition_id not in open_cids
+         and m.condition_id not in on_cooldown   # skip recently closed markets
+         and m.volume > 10_000
+         and m.yes_price >= 0.15                 # tightened from 0.10 — avoids extreme NO prices
+         and m.yes_price <= 0.85],               # tightened from 0.90 — avoids extreme NO prices
+        key=lambda m: m.volume, reverse=True,
+    )[:20]
 
     log_event(f"[SCAN] {len(candidates)} candidates from {len(markets)} markets")
 
@@ -1572,6 +1594,28 @@ async def bot_loop():
     # ── Restore state BEFORE printing startup stats ──
     load_saved_state()
 
+    # ── Clear Redis ledger drift if RESET_LEDGER=true in .env ──
+    # Use once to fix the $308 drift, then remove from .env
+    if os.getenv("RESET_LEDGER", "false").lower() == "true":
+        r = await get_redis()
+        if r:
+            await r.delete(RK_PNL_LEDGER)
+            # Resync ledger from current state total_pnl by writing a single correction entry
+            await redis_append_pnl_ledger({
+                "trade_id":    "ledger_reset",
+                "question":    "Ledger reset correction entry",
+                "side":        "RESET",
+                "pnl":         state.total_pnl,
+                "entry_price": 0,
+                "close_price": 0,
+                "shares":      0,
+                "reason":      "LEDGER_RESET",
+                "mode":        "PAPER",
+            })
+            log_event(f"[REDIS] Ledger reset — resynced to ${state.total_pnl:+.2f}")
+        else:
+            log_event("[REDIS] RESET_LEDGER=true but Redis not available")
+
     mode_str = "🔴 LIVE TRADING — REAL MONEY" if LIVE_MODE else "📄 PAPER TRADING (safe)"
     r = await get_redis()
     store_str = f"Redis ({REDIS_URL[:25]}…)" if (r is not None and _redis_available) else "JSON file (no Redis)"
@@ -1591,7 +1635,7 @@ async def bot_loop():
         else:
             log_event("[LIVE WARNING] Could not fetch on-chain balance — using saved value")
         await send_alert(
-            f"🤖 PolyBot v3 LIVE started\nBalance: ${state.balance:.2f} USDC\n"
+            f"PolyBot v3 LIVE started\nBalance: ${state.balance:.2f} USDC\n"
             f"Total PnL to date: ${state.total_pnl:+.2f}\n"
             f"Storage: {store_str}"
         )
@@ -1601,7 +1645,7 @@ async def bot_loop():
             await scan_cycle()
         except Exception as e:
             log_event(f"[LOOP ERROR] {e}")
-            await send_alert(f"⚠️ Bot loop error: {e}")
+            await send_alert(f"Bot loop error: {e}")
         await asyncio.sleep(SCAN_INTERVAL)
 
 
