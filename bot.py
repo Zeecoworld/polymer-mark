@@ -87,8 +87,8 @@ CLOB_MIN_ORDER_SIZE    = 5.0
 # Risk
 PAPER_BALANCE_USDC     = float(os.getenv("PAPER_BALANCE", "1000.0"))
 SCAN_INTERVAL          = int(os.getenv("SCAN_INTERVAL", "120"))
-MAX_POSITION_PCT       = float(os.getenv("MAX_POSITION_PCT", "0.04"))
-MIN_EDGE_PCT           = float(os.getenv("MIN_EDGE_PCT", "0.05"))
+MAX_POSITION_PCT       = float(os.getenv("MAX_POSITION_PCT", "0.05"))
+MIN_EDGE_PCT = float(os.getenv("MIN_EDGE_PCT", "0.02"))
 MAX_OPEN_POSITIONS     = int(os.getenv("MAX_OPEN_POSITIONS", "3"))
 
 # Alerts
@@ -903,63 +903,53 @@ async def analyse_market_llm_only(market: Market) -> Optional[dict]:
         pass
 
     prompt = (
-        f"You are a calibrated prediction market analyst.\n\n"
-        f"Question: {market.question}\nCategory: {market.category}\n"
+        f"You are a prediction market trader looking for mispriced markets.\n\n"
+        f"Question: {market.question}\n"
+        f"Category: {market.category}\n"
         f"Days until resolution: {days_left}\n"
-        f"Current YES price: {market.yes_price:.3f} (market says {market.yes_price*100:.1f}% chance)\n"
-        f"Current NO price: {market.no_price:.3f}\n24h Volume: ${market.volume:,.0f}\n"
-        f"Description: {market.description or 'N/A'}\nRecent news:\n{news}\n\n"
-        "1. Look for markets where recent news gives you genuine reason to disagree with the crowd.\n"
-        "2. Vague news = stay near market price.\n3. Close to resolution (<3 days) = market is usually right.\n"
-        "4. Edge must come from specific recent news, not guessing.\n\n"
-        "Respond ONLY with this JSON:\n"
-        '{"true_prob_yes":0.55,"confidence":0.60,"has_breaking_news":false,"news_directly_answers_question":false,"reasoning":"one sentence"}\n\n'
-        "CALIBRATION: has_breaking_news=false→confidence max 0.50 | "
-        "news_directly_answers_question=false→true_prob within 0.05 of market price | "
-        "volume>$1M→subtract 0.10 confidence | days_left<3→subtract 0.15 confidence"
+        f"Market YES price: {market.yes_price:.3f} ({market.yes_price*100:.1f}% implied)\n"
+        f"Market NO price:  {market.no_price:.3f}\n"
+        f"Volume: ${market.volume:,.0f}\n"
+        f"Description: {market.description or 'N/A'}\n"
+        f"Recent news: {news}\n\n"
+        "Your job: estimate the TRUE probability of YES resolving.\n"
+        "Be willing to disagree with the market if you have reason to.\n"
+        "A confidence of 0.60 means you are moderately sure of your estimate.\n"
+        "A confidence of 0.50 means you have some basis but limited news.\n"
+        "Never set confidence below 0.45 unless you have no information at all.\n\n"
+        "Respond ONLY with this exact JSON, no other text:\n"
+        '{"true_prob_yes": 0.55, "confidence": 0.60, "reasoning": "one sentence"}\n'
     )
+
     try:
         text = await call_replicate_llama(prompt)
         log_event(f"[LLM RAW] {text[:100]}")
         if "```" in text:
             text = text.split("```")[1]
-            if text.startswith("json"): text = text[4:]
+            if text.startswith("json"):
+                text = text[4:]
         s, e = text.find("{"), text.rfind("}") + 1
-        if s == -1 or e <= s: return None
+        if s == -1 or e <= s:
+            return None
         data = json.loads(text[s:e])
+
         true_prob = float(data.get("true_prob_yes", market.yes_price))
-        conf      = float(data.get("confidence", 0.5))
+        conf      = float(data.get("confidence", 0.50))
 
-        # ── Calibration penalties — loosened for paper trading ──
-        # Previously ALL penalties stacked making conf always end at ~0.35
-        # Now each penalty is softer and they don't compound below floor
+        # Single soft guard — if LLM gives nonsense extremes, pull back slightly
+        if true_prob < 0.03 or true_prob > 0.97:
+            true_prob = market.yes_price  # no edge at extremes, use market price
+            conf = 0.45
 
-        # Penalty 1: no breaking news → cap at 0.65 (was 0.50 — too harsh)
-        if not data.get("has_breaking_news", False):
-            conf = min(conf, 0.65)
+        true_prob = max(0.01, min(0.99, true_prob))
+        conf      = max(0.40, min(0.99, conf))  # floor at 0.40, never lower
 
-        # Penalty 2: news doesn't directly answer → shrink estimate + soft cap
-        # Only apply ONE of the two penalties, not both stacked
-        if not data.get("news_directly_answers_question", False):
-            true_prob = market.yes_price + (true_prob - market.yes_price) * 0.50  # was 0.25
-            conf = min(conf, 0.60)  # was 0.45 — this alone was killing trades
-
-        # Penalty 3: high-volume efficiency penalty (halved — volume alone shouldn't block)
-        if market.volume > 1_000_000:
-            conf = max(conf - 0.05, 0.30)   # was -0.10, floor was 0.01
-        elif market.volume > 500_000:
-            conf = max(conf - 0.03, 0.30)   # was -0.05
-
-        # Penalty 4: close to resolution
-        try:
-            end = datetime.fromisoformat(market.end_date.replace("Z", "+00:00"))
-            if (end - datetime.now(timezone.utc)).days < 3:
-                conf = max(conf - 0.10, 0.30)   # was -0.15
-        except Exception:
-            pass
-
-        return {"true_prob": max(0.01,min(0.99,true_prob)), "confidence": max(0.01,min(0.99,conf)),
-                "reasoning": data.get("reasoning",""), "source": "llm"}
+        return {
+            "true_prob":  true_prob,
+            "confidence": conf,
+            "reasoning":  data.get("reasoning", ""),
+            "source":     "llm",
+        }
     except Exception as e:
         log_event(f"[LLM ERROR] {market.question[:45]}: {e}")
         log_event(f"[LLM RAW] {text[:120] if 'text' in dir() else 'no response'}")
@@ -986,7 +976,7 @@ async def analyse_market(market: Market) -> Optional[dict]:
         edge_no  = (1 - llm_result["true_prob"]) - market.no_price
         side = "YES" if edge_yes >= edge_no else "NO"
         edge = edge_yes if side == "YES" else edge_no
-        if abs(edge) > 0.03:   # was 0.04 — lowered to catch more real edges
+        if abs(edge) > 0.02:   # was 0.04 — lowered to catch more real edges
             signals.append({"source":"llm","side":side,"edge":edge,
                             "confidence":llm_result["confidence"],"weight":0.50,
                             "reasoning":llm_result.get("reasoning","")})
@@ -1022,7 +1012,7 @@ async def analyse_market(market: Market) -> Optional[dict]:
 
     if len(dominant) == 1:
         solo = dominant[0]
-        if solo["confidence"] < 0.52:
+        if solo["confidence"] < 0.32:
             log_event(f"[SKIP] Solo signal conf={solo['confidence']:.2f} < 0.52 for {market.question[:40]}")
             return None
         # Solo signal passes — log it clearly
@@ -1039,7 +1029,7 @@ async def analyse_market(market: Market) -> Optional[dict]:
 
     # Composite gate — lowered from 0.04 to 0.025 for paper mode
     # 0.04 was too high: e.g. conf=0.55 × edge=0.06 = 0.033 → rejected
-    if avg_conf * avg_edge < 0.025:
+    if avg_conf * avg_edge < 0.008:
         log_event(f"[SKIP] Composite {avg_conf*avg_edge:.4f} too low (need ≥ 0.025) for {market.question[:40]}")
         return None
 
@@ -1062,8 +1052,8 @@ def risk_check(edge: float, confidence: float, market: Market) -> tuple[bool, st
     if edge < MIN_EDGE_PCT:                  return False, f"Edge {edge:.3f} below min {MIN_EDGE_PCT}"
     # Lowered from 0.50 → 0.45 — calibration penalties already pushed conf down
     # 0.50 was rejecting every trade that had even one penalty applied
-    if confidence < 0.35:                    return False, f"Confidence {confidence:.2f} too low (need ≥ 0.45)"
-    if market.volume < 50_000:               return False, f"Volume ${market.volume:,.0f} below $50k floor"
+    if confidence < 0.32:                    return False, f"Confidence {confidence:.2f} too low (need ≥ 0.45)"
+    if market.volume < 10_000: return False, f"Volume ${market.volume:,.0f} below $10k floor"
     if market.yes_price < 0.05 or market.yes_price > 0.95: return False, f"Price {market.yes_price:.3f} too extreme"
     if market.condition_id in {p.condition_id for p in open_pos}: return False, "Already have position"
     if LIVE_MODE:
@@ -1214,12 +1204,11 @@ async def scan_cycle():
     candidates = sorted(
     [m for m in markets
      if m.condition_id not in open_cids
-     and m.volume > 50_000
-     and m.yes_price >= 0.15   
-     and m.yes_price <= 0.85 
-     and question_allowed(m.question)],
+     and m.volume > 10_000
+     and m.yes_price >= 0.10
+     and m.yes_price <= 0.90],     
     key=lambda m: m.volume, reverse=True,
-    )[:6]
+)[:10]
 
     log_event(f"[SCAN] {len(candidates)} candidates from {len(markets)} markets")
 
