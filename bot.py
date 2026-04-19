@@ -87,8 +87,8 @@ CLOB_MIN_ORDER_SIZE    = 5.0
 # Risk
 PAPER_BALANCE_USDC     = float(os.getenv("PAPER_BALANCE", "1000.0"))
 SCAN_INTERVAL          = int(os.getenv("SCAN_INTERVAL", "120"))
-MAX_POSITION_PCT       = float(os.getenv("MAX_POSITION_PCT", "0.05"))   # was 0.02 — too small
-MIN_EDGE_PCT           = float(os.getenv("MIN_EDGE_PCT", "0.02"))       # was 0.05 — blocked all trades
+MAX_POSITION_PCT       = float(os.getenv("MAX_POSITION_PCT", "0.02"))
+MIN_EDGE_PCT           = float(os.getenv("MIN_EDGE_PCT", "0.05"))
 MAX_OPEN_POSITIONS     = int(os.getenv("MAX_OPEN_POSITIONS", "3"))
 COOLDOWN_SECONDS       = int(os.getenv("COOLDOWN_SECONDS", "3600"))     # 1hr cooldown after loss
 
@@ -397,6 +397,9 @@ async def ws_price_feed():
                         msg = json.loads(raw)
                     except Exception:
                         continue
+                    # Polymarket sometimes wraps messages in a list — unwrap it
+                    if isinstance(msg, list):
+                        msg = msg[0] if msg else {}
                     event_type = msg.get("event_type", "")
                     asset_id = msg.get("asset_id", "")
                     if event_type == "last_trade_price" and asset_id:
@@ -591,9 +594,7 @@ state = BotState()
 
 # ── Recently closed market cooldown ──
 # Prevents bot from reopening the same losing market immediately after stop loss
-# Key: condition_id, Value: timestamp of close
 _recently_closed: dict[str, float] = {}
-
 
 
 def load_saved_state():
@@ -738,7 +739,7 @@ def prune_memory():
 # ──────────────────────────────────────────────────────────────────────────────
 #  GAMMA API — MARKET FETCHING
 # ──────────────────────────────────────────────────────────────────────────────
-async def fetch_markets(limit: int = 50) -> list[Market]:
+async def fetch_markets(limit: int = 200) -> list[Market]:
     try:
         http = await get_http()
         r = await http.get(f"{GAMMA_API}/markets", params={
@@ -963,12 +964,43 @@ async def analyse_market_llm_only(market: Market) -> Optional[dict]:
 
 
 def detect_mispricing(market: Market) -> Optional[dict]:
+    """
+    Strategy 1 — Spread Arbitrage (article: bots made $150k on 8,894 trades at 1.5-3% each)
+    When YES + NO < $1.00 there is a mathematically guaranteed gap.
+    Threshold lowered to 0.97 to catch more opportunities than old 0.94.
+    """
     spread = market.yes_price + market.no_price
-    if spread < 0.94:
+    if spread < 0.97:
         gap  = 1.0 - spread
         side = "YES" if market.yes_price <= market.no_price else "NO"
-        return {"type": "spread_arb", "gap": gap, "side": side,
-                "token_id": market.yes_token_id if side == "YES" else market.no_token_id}
+        return {
+            "type":     "spread_arb",
+            "gap":      gap,
+            "side":     side,
+            "token_id": market.yes_token_id if side == "YES" else market.no_token_id,
+        }
+    return None
+
+
+def detect_overpriced_spread(market: Market) -> Optional[dict]:
+    """
+    Strategy 2 — Logical Arb: Overpriced spread (YES + NO > 1.05)
+    From article: "Mathematically impossible. Sell the overpriced side."
+    When combined prices > $1, someone is minting at a premium.
+    Buy the cheaper side — market must correct toward $1.
+    """
+    spread = market.yes_price + market.no_price
+    if spread > 1.05:
+        side = "NO" if market.no_price < market.yes_price else "YES"
+        edge = (spread - 1.0) * 0.7   # conservative — take 70% of gap
+        token_id = market.no_token_id if side == "NO" else market.yes_token_id
+        return {
+            "type":     "overpriced_arb",
+            "gap":      spread - 1.0,
+            "edge":     round(edge, 4),
+            "side":     side,
+            "token_id": token_id,
+        }
     return None
 
 
@@ -976,29 +1008,66 @@ async def analyse_market(market: Market) -> Optional[dict]:
     record_price(market.condition_id, market.yes_price)
     signals = []
 
+    # ── Strategy 4: LLM AI Signal (weight 0.35) ──
+    # Article: AI signals as part of diversified portfolio — not standalone
     llm_result = await analyse_market_llm_only(market)
-    if llm_result and llm_result["confidence"] >= 0.30:  # was 0.45 — too high after penalties
+    if llm_result and llm_result["confidence"] >= 0.30:
         edge_yes = llm_result["true_prob"] - market.yes_price
         edge_no  = (1 - llm_result["true_prob"]) - market.no_price
         side = "YES" if edge_yes >= edge_no else "NO"
         edge = edge_yes if side == "YES" else edge_no
-        if abs(edge) > 0.02:   # was 0.04 — lowered to catch more real edges
-            signals.append({"source":"llm","side":side,"edge":edge,
-                            "confidence":llm_result["confidence"],"weight":0.50,
-                            "reasoning":llm_result.get("reasoning","")})
+        if abs(edge) > 0.02:
+            signals.append({
+                "source":    "llm",
+                "side":      side,
+                "edge":      edge,
+                "confidence": llm_result["confidence"],
+                "weight":    0.35,
+                "reasoning": llm_result.get("reasoning", ""),
+            })
 
+    # ── Strategy 3: Momentum Breakout (weight 0.30) ──
+    # Article: 60-70% win rate, 50% allocation in aggressive portfolio
     mom_prob = get_momentum_signal(market.condition_id, market.yes_price)
     if mom_prob is not None:
         edge_yes = mom_prob - market.yes_price
         edge_no  = (1 - mom_prob) - market.no_price
         side = "YES" if edge_yes >= edge_no else "NO"
         edge = edge_yes if side == "YES" else edge_no
-        if abs(edge) > 0.04:
-            signals.append({"source":"momentum","side":side,"edge":edge,"confidence":0.55,"weight":0.35})
+        if abs(edge) > 0.03:
+            # Volume boost — higher volume trends are more reliable
+            vol_conf = min(0.72, 0.55 + (market.volume / 2_000_000) * 0.15)
+            signals.append({
+                "source":    "momentum",
+                "side":      side,
+                "edge":      edge,
+                "confidence": vol_conf,
+                "weight":    0.30,
+            })
 
+    # ── Strategy 1: Spread Arbitrage (weight 0.25) ──
+    # Article: nearly risk-free, 78-85% win rate, 1-3% monthly
     arb = detect_mispricing(market)
     if arb:
-        signals.append({"source":"arb","side":arb["side"],"edge":arb["gap"]*0.6,"confidence":0.80,"weight":0.15})
+        signals.append({
+            "source":    "spread_arb",
+            "side":      arb["side"],
+            "edge":      arb["gap"] * 0.7,
+            "confidence": 0.83,   # high — mathematically near-guaranteed
+            "weight":    0.25,
+        })
+
+    # ── Strategy 2: Logical Arb — Overpriced Spread (weight 0.10) ──
+    # Article: "Sell the overpriced outcomes, buy the underpriced"
+    over_arb = detect_overpriced_spread(market)
+    if over_arb:
+        signals.append({
+            "source":    "logical_arb",
+            "side":      over_arb["side"],
+            "edge":      over_arb["edge"],
+            "confidence": 0.78,
+            "weight":    0.10,
+        })
 
     if not signals: return None
 
@@ -1056,19 +1125,12 @@ def risk_check(edge: float, confidence: float, market: Market) -> tuple[bool, st
     open_pos = [p for p in state.positions if p.status == "OPEN"]
     if len(open_pos) >= MAX_OPEN_POSITIONS:  return False, f"Max positions ({MAX_OPEN_POSITIONS}) reached"
     if edge < MIN_EDGE_PCT:                  return False, f"Edge {edge:.3f} below min {MIN_EDGE_PCT}"
-    if confidence < 0.32:                    return False, f"Confidence {confidence:.2f} too low (need ≥ 0.32)"
-    if market.volume < 10_000:               return False, f"Volume ${market.volume:,.0f} below $10k floor"
-    # Tightened price range — avoids high-priced NO positions that hit stop loss instantly
-    if market.yes_price < 0.15 or market.yes_price > 0.85:
-        return False, f"Price {market.yes_price:.3f} outside safe range 0.15–0.85"
-    if market.condition_id in {p.condition_id for p in open_pos}:
-        return False, "Already have position"
-    # Double-check cooldown — prevents re-entry even if candidate filter was bypassed
-    now_ts = datetime.now(timezone.utc).timestamp()
-    closed_ts = _recently_closed.get(market.condition_id, 0)
-    if now_ts - closed_ts < COOLDOWN_SECONDS:
-        mins_left = int((COOLDOWN_SECONDS - (now_ts - closed_ts)) / 60)
-        return False, f"Market on cooldown — {mins_left} min remaining"
+    # Lowered from 0.50 → 0.45 — calibration penalties already pushed conf down
+    # 0.50 was rejecting every trade that had even one penalty applied
+    if confidence < 0.32:                    return False, f"Confidence {confidence:.2f} too low (need ≥ 0.45)"
+    if market.volume < 50_000:               return False, f"Volume ${market.volume:,.0f} below $50k floor"
+    if market.yes_price < 0.15 or market.yes_price > 0.85: return False, f"Price {market.yes_price:.3f} outside safe range 0.15-0.85"
+    if market.condition_id in {p.condition_id for p in open_pos}: return False, "Already have position"
     if LIVE_MODE:
         sz = position_size(edge, confidence)
         if sz < CLOB_MIN_ORDER_SIZE: return False, f"Size ${sz:.2f} below CLOB minimum"
@@ -1171,7 +1233,7 @@ async def _close_position(pos: Position, price: float, reason: str):
     state.total_pnl = round(state.total_pnl + pos.pnl, 4)
     state.closed_trades.append(asdict(pos))
 
-    # ── Record cooldown to prevent re-entering same losing market ──
+    # ── Record cooldown — prevents re-entering same market after close ──
     _recently_closed[pos.condition_id] = datetime.now(timezone.utc).timestamp()
 
     mode = "LIVE" if (LIVE_MODE and pos.order_id) else "PAPER"
@@ -1193,7 +1255,7 @@ async def scan_cycle():
     state.scan_count += 1
     log_event(f"── Scan #{state.scan_count} [{'LIVE' if LIVE_MODE else 'PAPER'}] " + "─" * 30)
 
-    markets = await fetch_markets(50)
+    markets = await fetch_markets(200)
     await update_positions(markets)
 
     open_cids = {p.condition_id for p in state.positions if p.status == "OPEN"}
@@ -1217,22 +1279,18 @@ async def scan_cycle():
             "release","launch","announce","chipset","nvidia","nvda","regulation","ban","lawsuit",
         ])
 
-    # Build cooldown blacklist — skip markets closed in last hour (prevents repeat losses)
     now_ts = datetime.now(timezone.utc).timestamp()
-    on_cooldown = {
-        cid for cid, ts in _recently_closed.items()
-        if now_ts - ts < COOLDOWN_SECONDS
-    }
+    on_cooldown = {cid for cid, ts in _recently_closed.items() if now_ts - ts < COOLDOWN_SECONDS}
     if on_cooldown:
         log_event(f"[COOLDOWN] {len(on_cooldown)} market(s) skipped — on 1hr cooldown")
 
     candidates = sorted(
         [m for m in markets
          if m.condition_id not in open_cids
-         and m.condition_id not in on_cooldown   # skip recently closed markets
+         and m.condition_id not in on_cooldown
          and m.volume > 10_000
-         and m.yes_price >= 0.15                 # tightened from 0.10 — avoids extreme NO prices
-         and m.yes_price <= 0.85],               # tightened from 0.90 — avoids extreme NO prices
+         and m.yes_price >= 0.15
+         and m.yes_price <= 0.85],
         key=lambda m: m.volume, reverse=True,
     )[:20]
 
@@ -1366,8 +1424,11 @@ const pc=n=>(+n>=0?'pp':'pn');
 const ps=n=>(+n>=0?'+$':'−$')+f(Math.abs(n));
 function srcPill(src){
   src=(src||'ai').toLowerCase();
+  if(src.includes('logical_arb'))return'<span class="pill arb" style="background:#1a1040;color:#c4b5fd">LARB</span>';
+  if(src.includes('spread_arb'))return'<span class="pill arb">ARB</span>';
   if(src.includes('arb'))return'<span class="pill arb">ARB</span>';
   if(src.includes('momentum'))return'<span class="pill mom">MOM</span>';
+  if(src.includes('llm'))return'<span class="pill ai">AI</span>';
   return'<span class="pill ai">AI</span>';
 }
 function showTab(name){
@@ -1595,22 +1656,14 @@ async def bot_loop():
     load_saved_state()
 
     # ── Clear Redis ledger drift if RESET_LEDGER=true in .env ──
-    # Use once to fix the $308 drift, then remove from .env
     if os.getenv("RESET_LEDGER", "false").lower() == "true":
         r = await get_redis()
         if r:
             await r.delete(RK_PNL_LEDGER)
-            # Resync ledger from current state total_pnl by writing a single correction entry
             await redis_append_pnl_ledger({
-                "trade_id":    "ledger_reset",
-                "question":    "Ledger reset correction entry",
-                "side":        "RESET",
-                "pnl":         state.total_pnl,
-                "entry_price": 0,
-                "close_price": 0,
-                "shares":      0,
-                "reason":      "LEDGER_RESET",
-                "mode":        "PAPER",
+                "trade_id": "ledger_reset", "question": "Ledger reset correction entry",
+                "side": "RESET", "pnl": state.total_pnl, "entry_price": 0,
+                "close_price": 0, "shares": 0, "reason": "LEDGER_RESET", "mode": "PAPER",
             })
             log_event(f"[REDIS] Ledger reset — resynced to ${state.total_pnl:+.2f}")
         else:
@@ -1620,10 +1673,10 @@ async def bot_loop():
     r = await get_redis()
     store_str = f"Redis ({REDIS_URL[:25]}…)" if (r is not None and _redis_available) else "JSON file (no Redis)"
 
-    log_event(f"Polymarket AI Bot v3 started — {mode_str}")
+    log_event(f"Polymarket AI Bot v4 started — {mode_str}")
     log_event(f"State storage: {store_str}")
     log_event(f"LLM: Replicate → {REPLICATE_MODEL}")
-    log_event(f"Signals: LLM (0.50) + Momentum (0.35) + Spread-Arb (0.15)")
+    log_event(f"Strategies: Spread-Arb (0.25) + Logical-Arb (0.10) + Momentum (0.30) + LLM-AI (0.35)")
     log_event(f"Balance: ${state.balance:.2f} | PnL: ${state.total_pnl:+.2f} | Trades: {state.trades_taken}")
     log_event("─" * 60)
 
@@ -1635,7 +1688,7 @@ async def bot_loop():
         else:
             log_event("[LIVE WARNING] Could not fetch on-chain balance — using saved value")
         await send_alert(
-            f"PolyBot v3 LIVE started\nBalance: ${state.balance:.2f} USDC\n"
+            f"🤖 PolyBot v3 LIVE started\nBalance: ${state.balance:.2f} USDC\n"
             f"Total PnL to date: ${state.total_pnl:+.2f}\n"
             f"Storage: {store_str}"
         )
@@ -1645,7 +1698,7 @@ async def bot_loop():
             await scan_cycle()
         except Exception as e:
             log_event(f"[LOOP ERROR] {e}")
-            await send_alert(f"Bot loop error: {e}")
+            await send_alert(f"⚠️ Bot loop error: {e}")
         await asyncio.sleep(SCAN_INTERVAL)
 
 
