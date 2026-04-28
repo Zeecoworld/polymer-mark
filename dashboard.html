@@ -401,7 +401,7 @@ let lastBalance = 1000;
 function render(data) {
   // Stats
   el('balance').textContent = '$' + data.balance.toFixed(2);
-  const pnl = data.total_pnl || 0;
+  const pnl = data.combined_pnl || data.total_pnl || 0;
   const startBal = 1000;
   const pct = ((data.balance - startBal) / startBal * 100).toFixed(2);
   el('pnl').textContent = sign(pnl) + fmt(pnl);

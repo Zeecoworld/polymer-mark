@@ -69,9 +69,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  CONFIG
-# ──────────────────────────────────────────────────────────────────────────────
+
 LIVE_MODE              = os.getenv("LIVE_MODE", "false").lower() == "true"
 
 # LLM
@@ -103,14 +101,11 @@ MAX_OPEN_POSITIONS     = int(os.getenv("MAX_OPEN_POSITIONS",    "5"))     # qual
 COOLDOWN_SECONDS       = int(os.getenv("COOLDOWN_SECONDS",     "3600"))  # 1hr base cooldown
 
 # ── BUY-LOW / SELL-HIGH PRICE BANDS ──
-# We only enter "cheap" positions — price must be in this range
 ENTRY_MIN_PRICE        = 0.12   # don't buy below 12¢ (too speculative)
 ENTRY_MAX_PRICE        = 0.45   # don't buy above 45¢ (not cheap enough)
-# Take profit when price reaches this level
-TAKE_PROFIT_TARGET     = 0.72   # sell at 72¢+ (was entry+0.30 — now absolute target)
-TAKE_PROFIT_MIN_GAIN   = 0.22   # minimum gain before selling (even if below 72¢)
-# Stop loss
-STOP_LOSS_PCT          = 0.40   # exit if price drops 40% of entry (e.g. enter 0.30 → stop 0.18)
+TAKE_PROFIT_TARGET     = 0.72   # sell at 72¢+ (absolute target)
+TAKE_PROFIT_MIN_GAIN   = 0.22   # minimum gain before selling
+STOP_LOSS_PCT          = 0.40   # exit if price drops 40% of entry
 STOP_LOSS_FLOOR        = 0.07   # never let position drop below 7¢
 
 # Alerts
@@ -129,6 +124,9 @@ RK_POSITIONS      = "polybot:positions"
 RK_CLOSED_TRADES  = "polybot:closed_trades"
 RK_PNL_LEDGER     = "polybot:pnl_ledger"
 RK_LOG            = "polybot:log"
+
+# ── FIX 2: Semaphore — max concurrent LLM calls ──
+_LLM_SEM = asyncio.Semaphore(4)
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  STARTUP GUARDS
@@ -151,21 +149,18 @@ if LIVE_MODE:
         raise RuntimeError(f"LIVE_MODE=true but missing env vars: {', '.join(_missing)}")
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  MARKET FILTERS — the heart of "don't enter bad trades"
+#  MARKET FILTERS
 # ──────────────────────────────────────────────────────────────────────────────
 
-# ── Sports block — expanded to catch all variants ──
 SPORTS_BLOCK_KEYWORDS = [
     "nba","nfl","fifa","epl","soccer","football","basketball","tennis","golf",
     "cricket","ufc","boxing","baseball","hockey","mls","championship",
     "cup","playoff","finals","tournament","match","score",
-    # Club names
     "arsenal","chelsea","liverpool","manchester","tottenham","barcelona",
     "real madrid","juventus","bayern","psg","inter milan","ac milan",
     "avalanche","thunder","celtics","lakers","knicks","nuggets","suns",
     "warriors","heat","bucks","76ers","raptors","clippers","spurs",
     "cowboys","patriots","chiefs","eagles","rams","broncos","49ers",
-    # Explicit competition phrases
     "premier league","champions league","serie a","bundesliga","ligue 1",
     "stanley cup","world cup","super bowl","march madness","ncaa",
     "win the 2026 n","win the nhl","win the nba","win the nfl","win the mlb",
@@ -173,7 +168,6 @@ SPORTS_BLOCK_KEYWORDS = [
     "win the super bowl","win the world series","win the masters",
 ]
 
-# ── Meme/joke/religious/sci-fi markets — LLM has no real edge ──
 MEME_BLOCK_KEYWORDS = [
     "jesus","christ","god","allah","buddha","holy","divine","rapture",
     "alien","ufo","extraterrestrial","area 51","bigfoot","loch ness",
@@ -183,73 +177,43 @@ MEME_BLOCK_KEYWORDS = [
     "elon musk on mars","first person on mars","mars colony",
 ]
 
-# ── Trusted high-edge categories for buy-low strategy ──
 PREFERRED_CATEGORIES = [
-    # Crypto / finance — fast moving, good price swings
     "bitcoin","btc","ethereum","eth","crypto","solana","sol","coinbase",
     "binance","blockchain","defi","altcoin","stablecoin",
     "price above","price below","reach $","hit $","close above","close below",
     "fed","rate cut","rate hike","inflation","gdp","recession","interest rate",
     "nasdaq","s&p","oil price","gold price","fomc","cpi","earnings",
-    # Geopolitics — binary outcomes, clear resolution
     "ceasefire","peace deal","sanctions","treaty","war","invasion","nuclear",
     "nato","g7","g20","summit","resign","impeach","arrest","indicted",
     "ukraine","russia","iran","china","taiwan","north korea","israel","hamas",
     "tariff","trade deal","trade war",
-    # US Politics — high volume, clear resolution dates
     "president","election","vote","senate","congress","house","supreme court",
     "trump","biden","harris","newsom","desantis","vance","rubio",
     "win the 2028","win the 2026","win the election","win the primary",
-    # Tech — binary product/regulatory events
     "gpt","openai","claude","gemini","ai model","apple","google","microsoft",
     "meta","release","launch","announce","ban","lawsuit","regulation",
     "nvidia","nvda","chipset","ipo","acquisition","merger",
-    # Climate / science — clear resolution
     "hurricane","earthquake","flood","temperature record",
     "greenland","arctic","climate","co2",
 ]
 
 
 def question_allowed(q: str) -> bool:
-    """
-    Three-gate filter:
-    1. Block sports markets (LLM has no edge vs sports bettors)
-    2. Block meme/joke/religious markets (no reliable resolution signal)
-    3. Require at least one preferred keyword (stick to high-edge categories)
-    """
     t = q.lower()
-
-    # Gate 1 — sports block
     if any(kw in t for kw in SPORTS_BLOCK_KEYWORDS):
         return False
-
-    # Gate 2 — meme/joke block
     if any(kw in t for kw in MEME_BLOCK_KEYWORDS):
         return False
-
-    # Gate 3 — must match at least one preferred category
     if any(kw in t for kw in PREFERRED_CATEGORIES):
         return True
-
     return False
 
 
 def _question_too_similar(new_q: str, open_positions: list) -> bool:
-    """
-    Semantic deduplication — prevents opening contradicting positions
-    on the same person, country, or topic.
-    Examples caught:
-      - YES "JD Vance wins 2028 Republican primary"
-      - NO  "JD Vance wins 2028 US election"
-    Both are about Vance's electoral prospects — we should only hold one.
-    """
     new_lower = new_q.lower()
     open_questions = [p.question.lower() for p in open_positions if p.status == "OPEN"]
 
-    # Key entities — if new question AND an existing position both contain
-    # the same entity, block the new one
     entity_groups = [
-        # People
         ["vance","jd vance","j.d. vance"],
         ["trump","donald trump"],
         ["newsom","gavin newsom"],
@@ -262,7 +226,6 @@ def _question_too_similar(new_q: str, open_positions: list) -> bool:
         ["zelensky","volodymyr zelensky"],
         ["netanyahu","benjamin netanyahu"],
         ["xi jinping","xi jinping"],
-        # Countries / regions
         ["iran","iranian"],
         ["ukraine","ukrainian"],
         ["russia","russian"],
@@ -270,7 +233,6 @@ def _question_too_similar(new_q: str, open_positions: list) -> bool:
         ["israel","israeli","hamas","gaza"],
         ["greenland"],
         ["north korea","kim jong"],
-        # Topics
         ["bitcoin","btc"],
         ["ethereum","eth"],
         ["fed rate","federal reserve","fomc"],
@@ -285,7 +247,7 @@ def _question_too_similar(new_q: str, open_positions: list) -> bool:
         for oq in open_questions:
             oq_has = any(ent in oq for ent in group)
             if oq_has:
-                return True  # already have a position on this entity
+                return True
 
     return False
 
@@ -468,9 +430,6 @@ async def clob_get_midpoint(token_id: str) -> Optional[float]:
     return None
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  WEBSOCKET PRICE FEED
-# ──────────────────────────────────────────────────────────────────────────────
 _ws_prices:     dict[str, float] = {}
 _ws_subscribed: set[str]         = set()
 
@@ -527,9 +486,6 @@ def get_ws_price(token_id: str) -> Optional[float]:
     return _ws_prices.get(token_id)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  RSS NEWS
-# ──────────────────────────────────────────────────────────────────────────────
 RSS_FEEDS = {
     "crypto":  [
         "https://www.coindesk.com/arc/outboundfeeds/rss/",
@@ -558,12 +514,28 @@ RSS_FEEDS = {
 _news_cache:      dict = {}
 _news_cache_time: dict = {}
 NEWS_CACHE_TTL        = 300
+
+# ── FIX 3: HTTP client with proper reconnect guard ──
 _http: Optional[httpx.AsyncClient] = None
 
 
 async def get_http() -> httpx.AsyncClient:
     global _http
-    if _http is None or _http.is_closed:
+    needs_new = _http is None or _http.is_closed
+    if not needs_new:
+        # Extra guard: verify the client is actually usable
+        try:
+            if _http.is_closed:
+                needs_new = True
+        except Exception:
+            needs_new = True
+    if needs_new:
+        if _http is not None:
+            try:
+                await _http.aclose()
+            except Exception:
+                pass
+            _http = None
         _http = httpx.AsyncClient(
             timeout=15, follow_redirects=True,
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=4),
@@ -627,9 +599,6 @@ async def get_news_for_market(question: str, category: str) -> str:
     return " | ".join(top) if top else "No relevant news found."
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  ALERTS
-# ──────────────────────────────────────────────────────────────────────────────
 async def send_alert(msg: str):
     tasks = []
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
@@ -694,7 +663,7 @@ class Position:
     order_id:          str   = ""
     token_id:          str   = ""
     source:            str   = "ai"
-    opportunity_score: float = 0.0   # NEW — ranks quality of entry
+    opportunity_score: float = 0.0
 
 
 @dataclass
@@ -717,12 +686,14 @@ _recently_closed: dict[str, float] = {}
 # ──────────────────────────────────────────────────────────────────────────────
 #  STATE PERSISTENCE
 # ──────────────────────────────────────────────────────────────────────────────
-def load_saved_state():
-    loop = asyncio.get_event_loop()
+
+# ── FIX 1: async load_saved_state — no more get_event_loop() crash on Py 3.10+ ──
+async def load_saved_state():
+    saved = None
     try:
-        saved = loop.run_until_complete(redis_load_state())
-    except Exception:
-        saved = None
+        saved = await redis_load_state()
+    except Exception as e:
+        print(f"[STATE] Redis load failed: {e}")
 
     if saved is None and os.path.exists(LOG_FILE):
         try:
@@ -766,10 +737,14 @@ def load_saved_state():
 
 def _write_json_fallback():
     try:
+        # ── FIX 4: include unrealised PnL in JSON snapshot ──
+        unrealised_pnl = sum(p.pnl for p in state.positions if p.status == "OPEN")
         with open(LOG_FILE, "w", encoding="utf-8") as f:
             json.dump({
                 "balance":          state.balance,
                 "total_pnl":        state.total_pnl,
+                "unrealised_pnl":   round(unrealised_pnl, 4),
+                "combined_pnl":     round(state.total_pnl + unrealised_pnl, 4),
                 "scan_count":       state.scan_count,
                 "signals_analyzed": state.signals_analyzed,
                 "trades_taken":     state.trades_taken,
@@ -831,6 +806,18 @@ def prune_memory():
         _news_cache.pop(k, None)
         _news_cache_time.pop(k, None)
 
+    # ── FIX 6: prune _recently_closed — entries whose expiry has passed ──
+    # Values in _recently_closed are expiry timestamps, not start times.
+    # Add a 1hr grace period beyond expiry before deleting.
+    expired_cids = [
+        cid for cid, expiry_ts in _recently_closed.items()
+        if now > expiry_ts + COOLDOWN_SECONDS
+    ]
+    for cid in expired_cids:
+        del _recently_closed[cid]
+    if expired_cids:
+        log_event(f"[PRUNE] Removed {len(expired_cids)} expired cooldown entries")
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  GAMMA API — MARKET FETCHING
@@ -889,10 +876,6 @@ async def fetch_markets(limit: int = 200) -> list[Market]:
 
 
 def _mock_markets() -> list[Market]:
-    """
-    Mock markets designed to test the buy-low strategy.
-    All YES prices are in the 0.12–0.45 buy zone.
-    """
     base = [
         ("Will BTC close above $100k before June 2026?",       0.28, 0.72, 2_100_000, "crypto"),
         ("Will ETH hit $3k before May 2026?",                  0.32, 0.68,   890_000, "crypto"),
@@ -967,13 +950,13 @@ def get_momentum_signal(condition_id: str, current_price: float) -> Optional[flo
     if den == 0:
         return None
     slope = num / den
-    if abs(slope) < 0.005:   # tighter: only act on real momentum
+    if abs(slope) < 0.005:
         return None
     return round(max(0.02, min(0.98, current_price + slope * 3)), 4)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  LLM ANALYSIS  — v4 fixes confidence collapse + buy-low framing
+#  LLM ANALYSIS
 # ──────────────────────────────────────────────────────────────────────────────
 async def call_replicate_llama(prompt: str) -> str:
     system    = "You are a quantitative prediction market analyst. Always respond with valid JSON only. No markdown fences, no extra text."
@@ -1020,13 +1003,6 @@ async def call_replicate_llama(prompt: str) -> str:
 
 
 async def analyse_market_llm(market: Market) -> Optional[dict]:
-    """
-    LLM analysis with v4 improvements:
-    1. Confidence variance forced — no more 0.55 collapse
-    2. Framed as "buy low" opportunity question
-    3. Resolution timeline factored into confidence
-    4. Explicit confidence rubric in prompt
-    """
     news      = await get_news_for_market(market.question, market.category)
     days_left = "unknown"
     days_int  = 999
@@ -1037,7 +1013,6 @@ async def analyse_market_llm(market: Market) -> Optional[dict]:
     except Exception:
         pass
 
-    # Compute implied probability gap — this is what we're looking for
     implied_yes = market.yes_price * 100
 
     prompt = (
@@ -1071,7 +1046,6 @@ async def analyse_market_llm(market: Market) -> Optional[dict]:
         text = await call_replicate_llama(prompt)
         log_event(f"[LLM RAW] {text[:120]}")
 
-        # Strip markdown fences if present
         if "```" in text:
             text = text.split("```")[1]
             if text.startswith("json"):
@@ -1085,24 +1059,19 @@ async def analyse_market_llm(market: Market) -> Optional[dict]:
         conf      = float(data.get("confidence",    0.50))
         reasoning = data.get("reasoning", "")
 
-        # ── Sanity clamp — reject extreme outputs ──
         if true_prob < 0.03 or true_prob > 0.97:
-            # Extreme prediction with no strong news → reduce confidence
             if conf < 0.75:
                 log_event(f"[LLM] Extreme prob {true_prob:.2f} rejected — no strong news backing")
                 return None
-            # If high confidence at extremes, still allow but cap
             true_prob = max(0.04, min(0.96, true_prob))
 
         true_prob = max(0.01, min(0.99, true_prob))
         conf      = max(0.30, min(0.95, conf))
 
-        # ── Penalise far-future markets (>180 days) — too uncertain ──
         if days_int > 180:
             conf = max(0.30, conf - 0.12)
             log_event(f"[LLM] Confidence reduced for far-future market ({days_int}d): {conf:.2f}")
 
-        # ── Boost confidence when headlines are highly relevant ──
         if news != "No relevant news found." and news != "No recent news found.":
             words_in_question = set(market.question.lower().split())
             headline_words    = set(news.lower().split())
@@ -1123,32 +1092,17 @@ async def analyse_market_llm(market: Market) -> Optional[dict]:
 
 
 def score_opportunity(market: Market, signal: dict) -> float:
-    """
-    Score how good a buy-low opportunity this is.
-    Higher = better. Used to rank candidates before picking the best N.
-
-    Factors:
-    - Edge magnitude (how mispriced is it?)
-    - Confidence (how sure are we?)
-    - Entry price (cheaper = more upside room to profit)
-    - Days to resolution (shorter = faster profit realisation)
-    - Volume (more liquid = easier to exit)
-    """
     edge       = abs(signal.get("edge",       0))
     confidence = signal.get("confidence",     0)
     entry      = signal.get("entry_price",    0.5)
     volume     = market.volume
 
-    # Upside room: cheap entry has more room to grow toward 0.70+
-    # e.g. entry=0.15 → room=0.57, entry=0.40 → room=0.32
     upside_room = max(0, TAKE_PROFIT_TARGET - entry)
 
-    # Days bonus — resolve sooner = faster profit
     days_bonus = 0
     try:
         end  = datetime.fromisoformat(market.end_date.replace("Z", "+00:00"))
         days = max(1, (end - datetime.now(timezone.utc)).days)
-        # Sweet spot: 7–60 days. Too short (<7) = risky, too long (>180) = capital locked
         if 7 <= days <= 60:
             days_bonus = 0.15
         elif days <= 120:
@@ -1158,7 +1112,6 @@ def score_opportunity(market: Market, signal: dict) -> float:
     except Exception:
         pass
 
-    # Volume score — normalise to 0–0.1
     vol_score = min(0.10, (volume / 5_000_000) * 0.10)
 
     score = (
@@ -1173,11 +1126,9 @@ def score_opportunity(market: Market, signal: dict) -> float:
 
 
 def detect_spread_arb(market: Market) -> Optional[dict]:
-    """Spread Arb: when YES+NO < 0.97, guaranteed gap exists regardless of outcome."""
     spread = market.yes_price + market.no_price
     if spread < 0.97:
         gap      = 1.0 - spread
-        # Buy the cheaper side
         side     = "YES" if market.yes_price <= market.no_price else "NO"
         token_id = market.yes_token_id if side == "YES" else market.no_token_id
         return {"type": "spread_arb", "gap": gap, "side": side, "token_id": token_id}
@@ -1185,7 +1136,6 @@ def detect_spread_arb(market: Market) -> Optional[dict]:
 
 
 def detect_overpriced_spread(market: Market) -> Optional[dict]:
-    """Logical Arb: when YES+NO > 1.05, buy the cheaper side."""
     spread = market.yes_price + market.no_price
     if spread > 1.05:
         side     = "NO" if market.no_price < market.yes_price else "YES"
@@ -1196,19 +1146,10 @@ def detect_overpriced_spread(market: Market) -> Optional[dict]:
 
 
 async def analyse_market(market: Market) -> Optional[dict]:
-    """
-    Multi-signal analysis. Returns the best signal dict if actionable, else None.
-
-    Signal sources:
-      1. LLM AI (weight 0.40) — primary alpha source
-      2. Spread Arb (weight 0.30) — near risk-free
-      3. Logical Arb (weight 0.15) — overpriced spread
-      4. Momentum (weight 0.15) — trend following
-    """
     record_price(market.condition_id, market.yes_price)
     signals = []
 
-    # ── 1. LLM AI ──
+    # ── FIX 2: wrap LLM call with semaphore (applied at call site in scan_cycle) ──
     llm_result = await analyse_market_llm(market)
     if llm_result and llm_result["confidence"] >= 0.35:
         edge_yes = llm_result["true_prob"] - market.yes_price
@@ -1225,7 +1166,6 @@ async def analyse_market(market: Market) -> Optional[dict]:
                 "reasoning": llm_result.get("reasoning", ""),
             })
 
-    # ── 2. Spread Arb ──
     arb = detect_spread_arb(market)
     if arb:
         signals.append({
@@ -1236,7 +1176,6 @@ async def analyse_market(market: Market) -> Optional[dict]:
             "weight":    0.30,
         })
 
-    # ── 3. Logical Arb ──
     over_arb = detect_overpriced_spread(market)
     if over_arb:
         signals.append({
@@ -1247,7 +1186,6 @@ async def analyse_market(market: Market) -> Optional[dict]:
             "weight":    0.15,
         })
 
-    # ── 4. Momentum ──
     mom_prob = get_momentum_signal(market.condition_id, market.yes_price)
     if mom_prob is not None:
         edge_yes = mom_prob - market.yes_price
@@ -1267,7 +1205,6 @@ async def analyse_market(market: Market) -> Optional[dict]:
     if not signals:
         return None
 
-    # ── Determine dominant side ──
     yes_sigs = [s for s in signals if s["side"] == "YES"]
     no_sigs  = [s for s in signals if s["side"] == "NO"]
     dominant = yes_sigs if sum(s["weight"] for s in yes_sigs) >= sum(s["weight"] for s in no_sigs) else no_sigs
@@ -1276,26 +1213,21 @@ async def analyse_market(market: Market) -> Optional[dict]:
     if not dominant:
         return None
 
-    # ── Signal quality gate ──
     if len(dominant) == 1:
         solo = dominant[0]
-        # Solo signals need higher confidence
         if solo["confidence"] < 0.40:
             log_event(f"[SKIP] Solo {solo['source']} conf={solo['confidence']:.2f} too low for {market.question[:40]}")
             return None
         log_event(f"[SIGNAL] Solo {solo['source']} accepted conf={solo['confidence']:.2f}")
     else:
-        # Multi-signal agreement → boost confidence by 6%
         for s in dominant:
             s["confidence"] = min(s["confidence"] + 0.06, 0.95)
         log_event(f"[SIGNAL] {len(dominant)}-signal agreement — conf boosted")
 
-    # ── Weighted composite ──
     total_w  = sum(s["weight"] for s in dominant)
     avg_conf = sum(s["confidence"] * s["weight"] for s in dominant) / total_w
     avg_edge = sum(s["edge"]       * s["weight"] for s in dominant) / total_w
 
-    # ── Composite quality gate — must be worth the trade ──
     composite = avg_conf * avg_edge
     if composite < 0.015:
         log_event(f"[SKIP] Composite {composite:.4f} below 0.015 for {market.question[:40]}")
@@ -1307,16 +1239,15 @@ async def analyse_market(market: Market) -> Optional[dict]:
     reasoning = next((s.get("reasoning", "") for s in dominant if s.get("reasoning")), "")
 
     signal = {
-        "side":       side,
+        "side":        side,
         "entry_price": entry,
-        "token_id":   token_id,
-        "edge":       round(avg_edge,  4),
-        "confidence": round(avg_conf,  4),
-        "reasoning":  reasoning,
-        "source":     sources,
+        "token_id":    token_id,
+        "edge":        round(avg_edge, 4),
+        "confidence":  round(avg_conf, 4),
+        "reasoning":   reasoning,
+        "source":      sources,
     }
 
-    # Attach opportunity score for ranking
     signal["opportunity_score"] = score_opportunity(market, signal)
 
     log_event(
@@ -1328,13 +1259,13 @@ async def analyse_market(market: Market) -> Optional[dict]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  RISK MANAGER  — v4: checks actual entry price side, not just yes_price
+#  RISK MANAGER
 # ──────────────────────────────────────────────────────────────────────────────
 def risk_check(signal: dict, market: Market) -> tuple[bool, str]:
     edge       = signal["edge"]
     confidence = signal["confidence"]
     side       = signal["side"]
-    entry      = signal["entry_price"]  # actual side we're entering
+    entry      = signal["entry_price"]
 
     open_pos = [p for p in state.positions if p.status == "OPEN"]
 
@@ -1350,15 +1281,12 @@ def risk_check(signal: dict, market: Market) -> tuple[bool, str]:
     if market.volume < 20_000:
         return False, f"Volume ${market.volume:,.0f} below $20k floor"
 
-    # ── KEY FIX v4: check the ENTRY price (the side we're actually buying) ──
-    # not just market.yes_price — this was the alien trade bug
     if entry < ENTRY_MIN_PRICE or entry > ENTRY_MAX_PRICE:
         return False, f"Entry {entry:.3f} outside buy-low zone [{ENTRY_MIN_PRICE}–{ENTRY_MAX_PRICE}]"
 
     if market.condition_id in {p.condition_id for p in open_pos}:
         return False, "Already have position in this market"
 
-    # ── Semantic dedup — no contradicting positions on same entity ──
     if _question_too_similar(market.question, open_pos):
         return False, f"Already have position on related market (entity dedup)"
 
@@ -1371,14 +1299,8 @@ def risk_check(signal: dict, market: Market) -> tuple[bool, str]:
 
 
 def position_size(edge: float, confidence: float) -> float:
-    """
-    Kelly-fractional sizing scaled by conviction.
-    Higher edge + confidence = larger bet (up to MAX_POSITION_PCT).
-    """
     kelly = (edge * confidence) / max(1 - (edge * confidence), 0.01)
-    # Use 30% Kelly — conservative but meaningful
     raw   = state.balance * kelly * 0.30
-    # Scale: min $10, max 8% of balance
     sized = max(10.0, min(raw, state.balance * MAX_POSITION_PCT))
     return round(sized, 2)
 
@@ -1415,7 +1337,11 @@ async def open_position(market: Market, signal: dict) -> Optional[Position]:
     else:
         state.balance -= size
 
-    shares = round(size / signal["entry_price"], 4)
+    # ── FIX 5: use 6 d.p. for shares to minimise rounding drift ──
+    # More decimal places means cost_basis (entry × shares) ≈ size exactly,
+    # and close proceeds calculation stays consistent with what we paid.
+    shares = round(size / signal["entry_price"], 6)
+
     pos = Position(
         market_id=market.id,
         condition_id=market.condition_id,
@@ -1450,7 +1376,7 @@ async def open_position(market: Market, signal: dict) -> Optional[Position]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  POSITION UPDATES & CLOSING  — v4 buy-low/sell-high exit logic
+#  POSITION UPDATES & CLOSING
 # ──────────────────────────────────────────────────────────────────────────────
 async def update_positions(markets: list[Market]):
     market_lookup = {m.condition_id: m for m in markets}
@@ -1460,7 +1386,6 @@ async def update_positions(markets: list[Market]):
         if pos.status != "OPEN":
             continue
 
-        # ── Price discovery (multi-source) ──
         new_price = None
         if pos.token_id:
             new_price = get_ws_price(pos.token_id)
@@ -1474,28 +1399,16 @@ async def update_positions(markets: list[Market]):
             new_price = await fetch_single_market_price(pos.market_id, pos.side)
         if new_price is not None:
             pos.current_price = new_price
+
+        # ── FIX 5 (cont.): consistent PnL calc using same share precision ──
         pos.pnl = round((pos.current_price - pos.entry_price) * pos.shares, 4)
 
-        # ── v4 BUY-LOW / SELL-HIGH exit logic ──
-        #
-        # Take Profit:
-        #   Exit when price reaches TAKE_PROFIT_TARGET (0.72) OR
-        #   when we've gained at least TAKE_PROFIT_MIN_GAIN (0.22) over entry.
-        #   This is the "sell high" part — lock in profits before reversal.
-        #
-        # Stop Loss:
-        #   Dynamic: stop at 40% loss of entry price.
-        #   E.g. entered at 0.30 → stop at 0.18 (loss of 0.12)
-        #   But never below STOP_LOSS_FLOOR (0.07) regardless.
-        #   This protects against catastrophic losses while giving room.
-
         take_profit = min(TAKE_PROFIT_TARGET, pos.entry_price + TAKE_PROFIT_MIN_GAIN + 0.05)
-        # For cheap entries we want the price to rise significantly
         take_profit = max(take_profit, pos.entry_price + TAKE_PROFIT_MIN_GAIN)
 
         stop_loss = max(
-            pos.entry_price * (1 - STOP_LOSS_PCT),  # 40% below entry
-            STOP_LOSS_FLOOR,                          # never below 7¢
+            pos.entry_price * (1 - STOP_LOSS_PCT),
+            STOP_LOSS_FLOOR,
         )
 
         if pos.current_price >= take_profit:
@@ -1503,38 +1416,34 @@ async def update_positions(markets: list[Market]):
         elif pos.current_price <= stop_loss:
             await _close_position(pos, pos.current_price, "STOP_LOSS")
         else:
-            # ── Trailing profit protection ──
-            # If position has gained > 30% of entry value and starts dropping,
-            # move stop to break-even + 5% to lock in some profit
             gain_pct = (pos.current_price - pos.entry_price) / pos.entry_price
             if gain_pct > 0.30:
-                breakeven_stop = pos.entry_price * 1.05  # +5% buffer
+                breakeven_stop = pos.entry_price * 1.05
                 if pos.current_price < breakeven_stop and pos.pnl > 0:
                     log_event(f"[TRAILING] Locking profit on {pos.question[:40]} — closing near breakeven+5%")
                     await _close_position(pos, pos.current_price, "TRAILING_STOP")
 
 
 async def _close_position(pos: Position, price: float, reason: str):
+    # ── FIX 5 (cont.): use same 6 d.p. shares for close calc ──
     pos.pnl         = round((price - pos.entry_price) * pos.shares, 4)
     pos.close_price = price
     pos.close_time  = datetime.now(timezone.utc).isoformat()
     pos.status      = "CLOSED"
 
-    # Return capital + profit/loss
     proceeds         = price * pos.shares
     state.balance    = round(state.balance + proceeds, 2)
     state.total_pnl  = round(state.total_pnl + pos.pnl, 4)
     state.closed_trades.append(asdict(pos))
 
-    # ── Cooldown — prevent re-entering losing markets ──
     now_ts = datetime.now(timezone.utc).timestamp()
     if reason == "STOP_LOSS":
-        _recently_closed[pos.condition_id] = now_ts + 82800   # 24hr ban
+        _recently_closed[pos.condition_id] = now_ts + 82800   # expiry = now + 23hr
         log_event(f"[COOLDOWN 24H] {pos.question[:40]} — banned 24hr after stop loss")
     elif reason == "TRAILING_STOP":
-        _recently_closed[pos.condition_id] = now_ts + 7200    # 2hr ban
+        _recently_closed[pos.condition_id] = now_ts + 7200    # expiry = now + 2hr
     else:
-        _recently_closed[pos.condition_id] = now_ts           # standard 1hr
+        _recently_closed[pos.condition_id] = now_ts + COOLDOWN_SECONDS  # expiry = now + 1hr
 
     mode   = "LIVE" if (LIVE_MODE and pos.order_id) else "PAPER"
     emoji  = "🟢" if pos.pnl >= 0 else "🔴"
@@ -1558,8 +1467,15 @@ async def _close_position(pos: Position, price: float, reason: str):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  MAIN SCAN CYCLE  — v4: rank by opportunity score, pick top N
+#  MAIN SCAN CYCLE — FIX 2: concurrent LLM via asyncio.gather + semaphore
 # ──────────────────────────────────────────────────────────────────────────────
+async def _analyse_with_semaphore(market: Market) -> tuple[Market, Optional[dict]]:
+    """Run analyse_market under the shared semaphore — prevents LLM flood."""
+    async with _LLM_SEM:
+        signal = await analyse_market(market)
+    return market, signal
+
+
 async def scan_cycle():
     state.scan_count += 1
     log_event(f"── Scan #{state.scan_count} [{'LIVE' if LIVE_MODE else 'PAPER'}] " + "─" * 30)
@@ -1569,15 +1485,12 @@ async def scan_cycle():
 
     open_cids  = {p.condition_id for p in state.positions if p.status == "OPEN"}
     now_ts     = datetime.now(timezone.utc).timestamp()
-    on_cooldown = {cid for cid, ts in _recently_closed.items() if now_ts - ts < COOLDOWN_SECONDS}
+    on_cooldown = {cid for cid, expiry in _recently_closed.items() if now_ts < expiry}
     if on_cooldown:
         log_event(f"[COOLDOWN] {len(on_cooldown)} market(s) skipped")
 
     open_positions_list = [p for p in state.positions if p.status == "OPEN"]
 
-    # ── Filter candidates ──
-    # Core buy-low filter: we ONLY look at markets with at least one side priced
-    # in the ENTRY_MIN_PRICE–ENTRY_MAX_PRICE buy zone (0.12–0.45)
     candidates = []
     for m in markets:
         if m.condition_id in open_cids:
@@ -1591,7 +1504,6 @@ async def scan_cycle():
         if _question_too_similar(m.question, open_positions_list):
             continue
 
-        # Buy-low filter: at least one side must be in the cheap zone
         yes_in_zone = ENTRY_MIN_PRICE <= m.yes_price <= ENTRY_MAX_PRICE
         no_in_zone  = ENTRY_MIN_PRICE <= m.no_price  <= ENTRY_MAX_PRICE
         if not (yes_in_zone or no_in_zone):
@@ -1599,9 +1511,8 @@ async def scan_cycle():
 
         candidates.append(m)
 
-    # Sort by volume first to ensure we analyse the most liquid markets
     candidates.sort(key=lambda m: m.volume, reverse=True)
-    candidates = candidates[:30]  # analyse top 30
+    candidates = candidates[:30]
 
     log_event(f"[SCAN] {len(candidates)} candidates in buy zone from {len(markets)} markets")
 
@@ -1610,15 +1521,21 @@ async def scan_cycle():
         await save_state()
         return
 
-    # ── Analyse all candidates and collect signals ──
-    ranked_signals: list[tuple[Market, dict]] = []
+    # ── FIX 2: fire all LLM calls concurrently, bounded by semaphore ──
+    state.signals_analyzed += len(candidates)
+    raw_results = await asyncio.gather(
+        *[_analyse_with_semaphore(m) for m in candidates],
+        return_exceptions=True,
+    )
 
-    for market in candidates:
-        state.signals_analyzed += 1
-        signal = await analyse_market(market)
+    ranked_signals: list[tuple[Market, dict]] = []
+    for result in raw_results:
+        if isinstance(result, Exception):
+            log_event(f"[SCAN] Analysis task failed: {result}")
+            continue
+        market, signal = result
         if not signal:
             continue
-
         allow, reason = risk_check(signal, market)
         if not allow:
             log_event(
@@ -1626,11 +1543,8 @@ async def scan_cycle():
                 f"(edge={signal['edge']:.3f} conf={signal['confidence']:.2f})"
             )
             continue
-
         ranked_signals.append((market, signal))
-        await asyncio.sleep(1)  # rate limit LLM calls slightly
 
-    # ── Rank by opportunity score and trade the BEST ones ──
     ranked_signals.sort(key=lambda x: x[1]["opportunity_score"], reverse=True)
 
     slots_available = MAX_OPEN_POSITIONS - len(open_positions_list)
@@ -1641,7 +1555,6 @@ async def scan_cycle():
         if trades_this_scan >= slots_available:
             log_event(f"[SCAN] Slots full — best remaining signal was score={signal['opportunity_score']:.3f}")
             break
-        # Re-check dedup after each trade (in case we just opened a related position)
         current_open = [p for p in state.positions if p.status == "OPEN"]
         if _question_too_similar(market.question, current_open):
             log_event(f"[SKIP late dedup] {market.question[:45]}")
@@ -1666,14 +1579,20 @@ async def scan_cycle():
     wins  = sum(1 for t in state.closed_trades if t.get("pnl", 0) > 0)
     total = len(state.closed_trades)
     wr    = f"{wins/total*100:.0f}%" if total > 0 else "—"
+
+    # ── FIX 4: log combined (realised + unrealised) PnL ──
+    unrealised = sum(p.pnl for p in state.positions if p.status == "OPEN")
     log_event(
-        f"Balance: ${state.balance:.2f} | PnL: ${state.total_pnl:+.2f} | "
+        f"Balance: ${state.balance:.2f} | "
+        f"Realised PnL: ${state.total_pnl:+.2f} | "
+        f"Unrealised: ${unrealised:+.2f} | "
+        f"Combined: ${state.total_pnl + unrealised:+.2f} | "
         f"Open: {open_count} | Trades: {state.trades_taken} | WinRate: {wr}"
     )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  WEB DASHBOARD  — v4: shows opportunity scores, win rate, buy-low strategy
+#  WEB DASHBOARD  — FIX 4: shows combined realised + unrealised PnL
 # ──────────────────────────────────────────────────────────────────────────────
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
@@ -1702,12 +1621,10 @@ h1{font-size:20px;font-weight:700;color:#fff}
 .sl{font-size:10px;color:var(--m);text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px}
 .sv{font-size:20px;font-weight:600;color:#fff;font-family:'JetBrains Mono',monospace}
 .sv.g{color:var(--g)}.sv.r{color:var(--r)}.sv.b{color:var(--a)}.sv.p{color:var(--p)}.sv.o{color:var(--o)}
-/* Strategy info box */
 .strategy{background:rgba(249,115,22,.06);border:1px solid rgba(249,115,22,.25);border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:12px}
 .strategy strong{color:var(--o)}
 .strategy .params{display:flex;gap:16px;margin-top:8px;flex-wrap:wrap}
 .strategy .param{color:var(--m)}.strategy .pval{color:#fff;font-family:'JetBrains Mono',monospace}
-/* Integrity */
 .integrity{background:var(--s);border:1px solid var(--b);border-radius:8px;padding:14px 16px;margin-bottom:16px}
 .integrity.ok{border-color:#166534}.integrity.warn{border-color:#854d0e}
 .int-title{font-size:10px;font-weight:600;color:var(--m);text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px}
@@ -1715,7 +1632,6 @@ h1{font-size:20px;font-weight:700;color:#fff}
 .int-label{color:var(--m)}.int-val{font-family:'JetBrains Mono',monospace;color:#fff}
 .int-status{font-size:11px;font-weight:600;margin-top:8px;padding:4px 10px;border-radius:4px;display:inline-block}
 .int-status.ok{background:#14532d;color:#86efac}.int-status.warn{background:#451a03;color:#fde68a}.int-status.na{background:#1c1917;color:#9ca3af}
-/* Tabs */
 .tabs{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap}
 .tab{background:var(--s);border:1px solid var(--b);border-radius:5px;padding:5px 12px;font-size:11px;cursor:pointer;color:var(--m);transition:all .15s}
 .tab:hover{color:var(--t)}.tab.active{background:var(--a);border-color:var(--a);color:#fff}
@@ -1738,10 +1654,11 @@ tr:hover td{background:rgba(59,130,246,.04)}
 .btn:hover{background:#1d4ed8}
 .upd{font-size:11px;color:var(--m)}.empty{padding:20px;color:var(--m);font-size:12px;text-align:center}
 .hidden{display:none}
-/* Score bar */
 .score-bar{display:flex;align-items:center;gap:6px}
 .score-fill{height:4px;border-radius:2px;background:var(--a)}
 .wr-good{color:var(--g)}.wr-med{color:var(--y)}.wr-bad{color:var(--r)}
+/* FIX 4: combined PnL highlight */
+.pnl-combined{font-size:10px;color:var(--m);margin-top:2px}
 </style>
 </head>
 <body>
@@ -1773,9 +1690,11 @@ tr:hover td{background:rgba(59,130,246,.04)}
 
 <div class="integrity" id="integrity-box">
   <div class="int-title">PnL Integrity Check</div>
-  <div class="int-row"><span class="int-label">Running total (state)</span><span class="int-val" id="int-running">—</span></div>
+  <div class="int-row"><span class="int-label">Realised PnL (closed trades)</span><span class="int-val" id="int-running">—</span></div>
+  <div class="int-row"><span class="int-label">Unrealised PnL (open positions)</span><span class="int-val" id="int-unrealised">—</span></div>
+  <div class="int-row"><span class="int-label">Combined PnL</span><span class="int-val" id="int-combined">—</span></div>
   <div class="int-row"><span class="int-label">Ledger sum (Redis)</span><span class="int-val" id="int-ledger">—</span></div>
-  <div class="int-row"><span class="int-label">Drift</span><span class="int-val" id="int-drift">—</span></div>
+  <div class="int-row"><span class="int-label">Ledger drift</span><span class="int-val" id="int-drift">—</span></div>
   <span class="int-status na" id="int-status">Checking…</span>
 </div>
 
@@ -1848,7 +1767,11 @@ async function loadState(){
     sb.textContent=d.storage||'JSON';
     sb.className='badge '+(d.storage==='Redis'?'redis':'json');
 
-    const pnl=+d.total_pnl||0;
+    // FIX 4: use combined_pnl (realised + unrealised) in stats
+    const realisedPnl  = +d.total_pnl||0;
+    const unrealisedPnl= +d.unrealised_pnl||0;
+    const combinedPnl  = +d.combined_pnl || (realisedPnl + unrealisedPnl);
+
     const cl=d.closed_trades||[];
     const wins=cl.filter(t=>(t.pnl||0)>0).length;
     const total=cl.length;
@@ -1857,14 +1780,21 @@ async function loadState(){
 
     document.getElementById('stats').innerHTML=`
       <div class="stat"><div class="sl">Balance</div><div class="sv mono">$${f(d.balance)}</div></div>
-      <div class="stat"><div class="sl">Total PnL</div><div class="sv ${pc(pnl)} mono">${ps(pnl)}</div></div>
+      <div class="stat">
+        <div class="sl">Combined PnL</div>
+        <div class="sv ${pc(combinedPnl)} mono">${ps(combinedPnl)}</div>
+        <div class="pnl-combined">R: ${ps(realisedPnl)} · U: ${ps(unrealisedPnl)}</div>
+      </div>
       <div class="stat"><div class="sl">Win Rate</div><div class="sv ${wrCls}">${wr}</div></div>
       <div class="stat"><div class="sl">Trades</div><div class="sv b">${d.trades_taken||0}</div></div>
       <div class="stat"><div class="sl">Open</div><div class="sv">${(d.open_positions||[]).length}</div></div>
       <div class="stat"><div class="sl">Scans</div><div class="sv">${d.scan_count||0}</div></div>
       <div class="stat"><div class="sl">Signals</div><div class="sv">${d.signals_analyzed||0}</div></div>`;
 
-    document.getElementById('int-running').textContent='$'+f(pnl);
+    // FIX 4: integrity panel shows realised, unrealised, combined separately
+    document.getElementById('int-running').textContent   = '$'+f(realisedPnl);
+    document.getElementById('int-unrealised').textContent= '$'+f(unrealisedPnl);
+    document.getElementById('int-combined').textContent  = '$'+f(combinedPnl);
 
     const ops=d.open_positions||[];
     document.getElementById('pos-tbl').innerHTML=ops.length===0
@@ -1926,6 +1856,7 @@ async function loadLedger(){
     const d=await(await fetch('/ledger?limit=50&t='+Date.now())).json();
     const ledger=d.entries||[];
     const ledgerTotal=d.ledger_total;
+    // Compare ledger against realised PnL only (ledger only captures closed trades)
     const running=+(document.getElementById('int-running').textContent.replace(/[^0-9.-]/g,''))||0;
     document.getElementById('int-ledger').textContent=ledgerTotal!=null?'$'+f(ledgerTotal):'Not available (no Redis)';
     const box=document.getElementById('integrity-box');
@@ -1976,9 +1907,16 @@ async def _handle_trades(request):
     cl      = state.closed_trades
     wins    = sum(1 for t in cl if t.get("pnl", 0) > 0)
     total   = len(cl)
+
+    # ── FIX 4: expose realised, unrealised, and combined PnL separately ──
+    unrealised_pnl = round(sum(p.pnl for p in state.positions if p.status == "OPEN"), 4)
+    combined_pnl   = round(state.total_pnl + unrealised_pnl, 4)
+
     return aio_web.json_response({
         "balance":          state.balance,
-        "total_pnl":        state.total_pnl,
+        "total_pnl":        state.total_pnl,        # realised only
+        "unrealised_pnl":   unrealised_pnl,          # open positions mark-to-market
+        "combined_pnl":     combined_pnl,            # the number that should "move"
         "scan_count":       state.scan_count,
         "signals_analyzed": state.signals_analyzed,
         "trades_taken":     state.trades_taken,
@@ -2012,6 +1950,7 @@ async def _handle_health(request):
     cl       = state.closed_trades
     wins     = sum(1 for t in cl if t.get("pnl", 0) > 0)
     total    = len(cl)
+    unrealised_pnl = round(sum(p.pnl for p in state.positions if p.status == "OPEN"), 4)
     return aio_web.json_response({
         "status":         "ok",
         "mode":           "LIVE" if LIVE_MODE else "PAPER",
@@ -2020,6 +1959,8 @@ async def _handle_health(request):
         "open_positions": sum(1 for p in state.positions if p.status == "OPEN"),
         "balance":        round(state.balance, 2),
         "total_pnl":      round(state.total_pnl, 4),
+        "unrealised_pnl": unrealised_pnl,
+        "combined_pnl":   round(state.total_pnl + unrealised_pnl, 4),
         "trades":         state.trades_taken,
         "win_rate":       round(wins / total, 3) if total > 0 else 0,
         "strategy":       "buy_low_sell_high",
@@ -2054,16 +1995,16 @@ async def self_ping():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  MAIN BOOT
+#  MAIN BOOT — FIX 1: await load_saved_state() directly, no get_event_loop()
 # ──────────────────────────────────────────────────────────────────────────────
 async def bot_loop():
     await start_web()
     asyncio.create_task(self_ping())
     asyncio.create_task(ws_price_feed())
 
-    load_saved_state()
+    # FIX 1: now a proper async call — safe on Python 3.10+
+    await load_saved_state()
 
-    # Ledger reset support
     if os.getenv("RESET_LEDGER", "false").lower() == "true":
         r = await get_redis()
         if r:
