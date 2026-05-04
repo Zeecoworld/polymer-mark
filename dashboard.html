@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Polymarket AI Bot — Paper Trading Dashboard</title>
+<title>PolyBot v4.1 — Bug-Fixed Dashboard</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -16,6 +16,7 @@
     --red: #ff4560;
     --yellow: #f5c518;
     --blue: #3b9eff;
+    --orange: #f97316;
     --text: #d4e2ed;
     --muted: #566877;
     --mono: 'Space Mono', monospace;
@@ -33,7 +34,6 @@
     overflow-x: hidden;
   }
 
-  /* Grid noise texture */
   body::before {
     content: '';
     position: fixed;
@@ -53,13 +53,13 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 28px;
+    margin-bottom: 20px;
     padding-bottom: 16px;
     border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+    gap: 10px;
   }
-  .brand {
-    display: flex; align-items: center; gap: 14px;
-  }
+  .brand { display: flex; align-items: center; gap: 14px; }
   .brand-icon {
     width: 40px; height: 40px;
     background: linear-gradient(135deg, var(--green), #009966);
@@ -71,6 +71,8 @@
   .brand-name { font-size: 18px; font-weight: 800; color: #fff; letter-spacing: -0.5px; }
   .brand-sub  { font-size: 11px; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; }
 
+  .header-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
   .status-pill {
     display: flex; align-items: center; gap: 8px;
     padding: 6px 14px; border-radius: 99px;
@@ -78,9 +80,14 @@
     font-size: 11px; letter-spacing: 1px; text-transform: uppercase;
     color: var(--green);
   }
+  .status-pill.halted {
+    border-color: var(--red);
+    color: var(--red);
+    background: rgba(255,69,96,0.08);
+  }
   .pulse {
     width: 7px; height: 7px; border-radius: 50%;
-    background: var(--green);
+    background: currentColor;
     animation: pulse 2s infinite;
   }
   @keyframes pulse {
@@ -88,10 +95,39 @@
     50%      { opacity: 0.4; transform: scale(0.7); }
   }
 
+  /* ── Fix badges ── */
+  .fix-bar {
+    background: rgba(0,229,160,0.06);
+    border: 1px solid rgba(0,229,160,0.18);
+    border-radius: 10px;
+    padding: 10px 16px;
+    margin-bottom: 16px;
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  }
+  .fix-label { font-size: 10px; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; }
+  .fix-badge {
+    font-size: 10px; padding: 2px 8px; border-radius: 4px;
+    background: rgba(0,229,160,0.12); color: var(--green);
+    border: 1px solid rgba(0,229,160,0.25);
+  }
+
+  /* ── Circuit Breaker Banner ── */
+  .cb-banner {
+    background: rgba(255,69,96,0.08);
+    border: 1px solid rgba(255,69,96,0.35);
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    font-size: 12px;
+    color: #fca5a5;
+    display: none;
+  }
+  .cb-banner.visible { display: block; }
+
   /* ── Stat Cards ── */
   .stats-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     gap: 12px;
     margin-bottom: 20px;
   }
@@ -137,17 +173,17 @@
     border-bottom: 1px solid var(--border);
     background: var(--surface2);
   }
-  .panel-title { font-family: var(--sans); font-weight: 700; font-size: 13px; color: #fff; letter-spacing: 0.3px; }
+  .panel-title { font-family: var(--sans); font-weight: 700; font-size: 13px; color: #fff; }
   .panel-badge { font-size: 10px; padding: 3px 8px; border-radius: 99px; background: var(--border); color: var(--muted); }
 
   /* ── Positions table ── */
   .pos-table { width: 100%; border-collapse: collapse; }
   .pos-table th {
     font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase;
-    color: var(--muted); padding: 10px 18px; text-align: left;
+    color: var(--muted); padding: 10px 14px; text-align: left;
     background: var(--surface2); border-bottom: 1px solid var(--border);
   }
-  .pos-table td { padding: 12px 18px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  .pos-table td { padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
   .pos-table tr:last-child td { border-bottom: none; }
   .pos-table tr:hover td { background: rgba(255,255,255,0.02); }
 
@@ -158,12 +194,23 @@
   .side-YES { background: rgba(0,229,160,0.12); color: var(--green); border: 1px solid rgba(0,229,160,0.25); }
   .side-NO  { background: rgba(255,69,96,0.12);  color: var(--red);   border: 1px solid rgba(255,69,96,0.25); }
 
-  .q-text { max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .q-text { max-width: 240px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   .progress-bar {
     width: 80px; height: 5px; background: var(--border); border-radius: 99px; overflow: hidden;
   }
-  .progress-fill { height: 100%; border-radius: 99px; transition: width 0.4s ease; }
+  .progress-fill { height: 100%; border-radius: 99px; }
+
+  .stale-warn { color: var(--yellow); font-size: 10px; }
+  .hold-warn  { color: var(--yellow); }
+  .reason-tag {
+    font-size: 10px; padding: 1px 6px; border-radius: 3px;
+    background: var(--border); color: var(--muted);
+  }
+  .reason-tag.timeout { background: rgba(249,115,22,0.15); color: var(--orange); }
+  .reason-tag.stop    { background: rgba(255,69,96,0.12); color: var(--red); }
+  .reason-tag.profit  { background: rgba(0,229,160,0.12); color: var(--green); }
+  .reason-tag.trail   { background: rgba(59,130,246,0.12); color: var(--blue); }
 
   /* ── Log panel ── */
   .log-box {
@@ -176,29 +223,33 @@
   .log-box::-webkit-scrollbar-track { background: transparent; }
   .log-box::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
   .log-line { padding: 2px 0; border-bottom: 1px solid rgba(255,255,255,0.02); }
-  .log-line.open   { color: var(--green); }
-  .log-line.close  { color: var(--blue); }
-  .log-line.skip   { color: var(--muted); }
-  .log-line.error  { color: var(--red); }
+  .log-line.open     { color: var(--green); }
+  .log-line.close    { color: var(--blue); }
+  .log-line.skip     { color: var(--muted); }
+  .log-line.error    { color: var(--red); }
+  .log-line.stale    { color: var(--yellow); }
+  .log-line.timeout  { color: var(--orange); }
+  .log-line.circuit  { color: var(--red); font-weight: bold; }
 
-  /* ── Closed trades ── */
-  .trade-row {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 11px 18px; border-bottom: 1px solid var(--border);
-    font-size: 12px;
-  }
-  .trade-row:last-child { border-bottom: none; }
-  .trade-q { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); margin-right: 12px; }
-  .trade-pnl { font-weight: 700; font-family: var(--sans); font-size: 14px; }
-
-  /* ── Chart ── */
+  /* ── Equity Chart ── */
   .equity-chart { padding: 16px 18px 8px; }
   canvas { width: 100% !important; }
 
-  /* ── Bottom row ── */
+  /* ── Bottom Grid ── */
   .bottom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 
-  /* ── Refresh bar ── */
+  /* ── Trade row ── */
+  .trade-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 11px 18px; border-bottom: 1px solid var(--border);
+    font-size: 12px; gap: 8px;
+  }
+  .trade-row:last-child { border-bottom: none; }
+  .trade-q { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+  .trade-pnl { font-weight: 700; font-family: var(--sans); font-size: 14px; }
+  .trade-meta { font-size: 10px; color: var(--muted); white-space: nowrap; }
+
+  /* ── Footer ── */
   .refresh-info {
     text-align: center; font-size: 10px; color: var(--muted);
     padding: 16px; letter-spacing: 0.5px;
@@ -221,15 +272,36 @@
     <div class="brand">
       <div class="brand-icon">🤖</div>
       <div class="brand-text">
-        <div class="brand-name">PolyBot AI</div>
-        <div class="brand-sub">Claude-Powered Paper Trader</div>
+        <div class="brand-name">PolyBot v4.1</div>
+        <div class="brand-sub">Bug-Fixed · AI Paper Trader</div>
       </div>
     </div>
-    <div class="status-pill">
-      <div class="pulse"></div>
-      PAPER TRADING · LIVE
+    <div class="header-right">
+      <div class="status-pill" id="status-pill">
+        <div class="pulse"></div>
+        <span id="mode-label">PAPER · LIVE</span>
+      </div>
     </div>
   </header>
+
+  <!-- Fix badges -->
+  <div class="fix-bar">
+    <span class="fix-label">Fixes Applied ·</span>
+    <span class="fix-badge">Bug 1: Stale price + time-exit</span>
+    <span class="fix-badge">Bug 2: Exhaustive price refresh</span>
+    <span class="fix-badge">Bug 3: TP 72¢→65¢</span>
+    <span class="fix-badge">Bug 4: Trailing stop corrected</span>
+    <span class="fix-badge">Circuit breaker –25%</span>
+    <span class="fix-badge">LLM retry backoff</span>
+    <span class="fix-badge">Live mock-market guard</span>
+    <span class="fix-badge">fetched_at tracking</span>
+  </div>
+
+  <!-- Circuit Breaker Banner -->
+  <div class="cb-banner" id="cb-banner">
+    ⛔ <strong>CIRCUIT BREAKER ACTIVE</strong> — Balance fell below 75% floor.
+    New position scanning is paused. Existing positions are still managed (TP / SL / Timeout still fire normally).
+  </div>
 
   <!-- Stats -->
   <div class="stats-grid">
@@ -239,9 +311,9 @@
       <div class="stat-sub">USDC (simulated)</div>
     </div>
     <div class="stat-card" style="--accent:var(--blue)">
-      <div class="stat-label">Total P&L</div>
+      <div class="stat-label">Combined P&L</div>
       <div class="stat-value" id="pnl">$0.00</div>
-      <div class="stat-sub" id="pnl-pct">0.00% return</div>
+      <div class="stat-sub" id="pnl-sub">R: $0.00 · U: $0.00</div>
     </div>
     <div class="stat-card" style="--accent:var(--yellow)">
       <div class="stat-label">Open Positions</div>
@@ -269,14 +341,14 @@
   <div class="panel" style="margin-bottom:16px">
     <div class="panel-header">
       <span class="panel-title">Equity Curve</span>
-      <span class="panel-badge" id="equity-label">Paper Balance Over Time</span>
+      <span class="panel-badge" id="eq-label">Paper Balance Over Time</span>
     </div>
     <div class="equity-chart">
       <canvas id="equityChart" height="100"></canvas>
     </div>
   </div>
 
-  <!-- Main Grid: Open Positions + Log -->
+  <!-- Main Grid -->
   <div class="main-grid">
 
     <!-- Open Positions -->
@@ -303,8 +375,10 @@
 
   </div>
 
-  <!-- Bottom Grid: Closed Trades -->
+  <!-- Bottom Grid -->
   <div class="bottom-grid">
+
+    <!-- Closed Trades -->
     <div class="panel">
       <div class="panel-header">
         <span class="panel-title">Recent Closed Trades</span>
@@ -315,38 +389,39 @@
       </div>
     </div>
 
-    <!-- Strategy Info -->
+    <!-- Config panel -->
     <div class="panel">
       <div class="panel-header">
-        <span class="panel-title">Strategy Config</span>
+        <span class="panel-title">Strategy Config — v4.1 Fixed</span>
       </div>
-      <div style="padding: 18px; line-height: 2.2; font-size: 12px;">
-        <div><span style="color:var(--muted)">Model ·</span> llama-3.3-70b-instruct</div>
-        <div><span style="color:var(--muted)">Strategy ·</span> NLU Arb + Spread Detection</div>
-        <div><span style="color:var(--muted)">Provider ·</span> Replicate (free tier)</div>
-        <div><span style="color:var(--muted)">Min Edge ·</span> <span style="color:var(--yellow)">4.0%</span></div>
-        <div><span style="color:var(--muted)">Min Confidence ·</span> <span style="color:var(--yellow)">45%</span></div>
-        <div><span style="color:var(--muted)">Max Position ·</span> <span style="color:var(--yellow)">5% of balance</span></div>
-        <div><span style="color:var(--muted)">Max Open ·</span> <span style="color:var(--yellow)">8 positions</span></div>
-        <div><span style="color:var(--muted)">Take Profit ·</span> <span style="color:var(--green)">90¢ per share</span></div>
-        <div><span style="color:var(--muted)">Stop Loss ·</span> <span style="color:var(--red)">10¢ per share</span></div>
-        <div><span style="color:var(--muted)">Mode ·</span> <span style="color:var(--green)">📄 PAPER ONLY</span></div>
+      <div style="padding: 18px; line-height: 2.4; font-size: 12px;">
+        <div><span style="color:var(--muted)">Model ·</span> meta-llama-3-70b-instruct</div>
+        <div><span style="color:var(--muted)">Strategy ·</span> Buy-Low / Sell-High</div>
+        <div><span style="color:var(--muted)">Entry zone ·</span> <span style="color:var(--yellow)">$0.12 – $0.45</span></div>
+        <div><span style="color:var(--muted)">Take profit ·</span> <span style="color:var(--green)">≥$0.65 or +$0.18 gain ✅ fixed</span></div>
+        <div><span style="color:var(--muted)">Stop loss ·</span> <span style="color:var(--red)">–40% of entry</span></div>
+        <div><span style="color:var(--muted)">Force exit ·</span> <span style="color:var(--orange)">after 4 days ✅ fixed</span></div>
+        <div><span style="color:var(--muted)">Trailing stop ·</span> <span style="color:var(--blue)">+30% rise, floor at +10% ✅ fixed</span></div>
+        <div><span style="color:var(--muted)">Circuit breaker ·</span> <span style="color:var(--red)">halt at –25% drawdown ✅ new</span></div>
+        <div><span style="color:var(--muted)">Price refresh ·</span> <span style="color:var(--green)">WS → CLOB → Batch → REST ✅ fixed</span></div>
+        <div><span style="color:var(--muted)">LLM retry ·</span> <span style="color:var(--blue)">exp. backoff on 429/5xx ✅ new</span></div>
         <div style="margin-top:14px; padding:10px 14px; background:rgba(255,69,96,0.07); border:1px solid rgba(255,69,96,0.2); border-radius:8px; font-size:11px; color:var(--red);">
           ⚠️ Paper trading only. No real funds at risk.
         </div>
       </div>
     </div>
+
   </div>
 
   <div class="refresh-info">
-    Auto-refreshes every <span id="countdown">10</span>s &nbsp;·&nbsp; reads <code>paper_trades.json</code>
+    Auto-refreshes every <span id="countdown">10</span>s &nbsp;·&nbsp; reads <code>paper_trades.json</code> &nbsp;·&nbsp; PolyBot v4.1
   </div>
 
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script>
-// ── Chart Setup ────────────────────────────────────────────────────────────
+// ── Chart Setup ──────────────────────────────────────────────────────────────
 const ctx = document.getElementById('equityChart').getContext('2d');
 const equityData = { labels: [], datasets: [{
   label: 'Balance',
@@ -365,77 +440,129 @@ const chart = new Chart(ctx, {
   options: {
     responsive: true,
     animation: { duration: 400 },
-    plugins: { legend: { display: false }, tooltip: {
-      backgroundColor: '#141b22',
-      borderColor: '#1e2a35',
-      borderWidth: 1,
-      titleColor: '#d4e2ed',
-      bodyColor: '#00e5a0',
-      callbacks: { label: c => ` $${c.raw.toFixed(2)}` }
-    }},
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: '#141b22', borderColor: '#1e2a35', borderWidth: 1,
+        titleColor: '#d4e2ed', bodyColor: '#00e5a0',
+        callbacks: { label: c => ` $${c.raw.toFixed(2)}` }
+      }
+    },
     scales: {
       x: { grid: { color: '#1e2a35' }, ticks: { color: '#566877', font: { family: 'Space Mono', size: 10 } } },
-      y: { grid: { color: '#1e2a35' }, ticks: { color: '#566877', font: { family: 'Space Mono', size: 10 },
-           callback: v => '$' + v.toFixed(0) } }
+      y: { grid: { color: '#1e2a35' }, ticks: { color: '#566877', font: { family: 'Space Mono', size: 10 }, callback: v => '$' + v.toFixed(0) } }
     }
   }
 });
 
-// ── Helpers ────────────────────────────────────────────────────────────────
-const fmt = (n, dec=2) => '$' + Math.abs(n).toFixed(dec);
-const sign = n => n >= 0 ? '+' : '-';
-const pnlClass = n => n >= 0 ? 'pos' : 'neg';
-const el = id => document.getElementById(id);
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const fmt  = (n, dec=2) => '$' + Math.abs(+n||0).toFixed(dec);
+const sign = n => (+n||0) >= 0 ? '+' : '-';
+const pc   = n => (+n||0) >= 0 ? 'pos' : 'neg';
+const el   = id => document.getElementById(id);
 
 function uptime(startISO) {
   const diff = Math.floor((Date.now() - new Date(startISO)) / 1000);
-  const h = String(Math.floor(diff/3600)).padStart(2,'0');
-  const m = String(Math.floor((diff%3600)/60)).padStart(2,'0');
-  const s = String(diff%60).padStart(2,'0');
+  const h = String(Math.floor(diff / 3600)).padStart(2, '0');
+  const m = String(Math.floor((diff % 3600) / 60)).padStart(2, '0');
+  const s = String(diff % 60).padStart(2, '0');
   return `${h}:${m}:${s}`;
 }
 
-// ── Render ─────────────────────────────────────────────────────────────────
+function holdDaysStr(timestamp) {
+  if (!timestamp) return '—';
+  const days = (Date.now() - new Date(timestamp)) / 86400000;
+  const warn = days > 3;
+  return `<span class="${warn ? 'hold-warn' : ''}">${days.toFixed(1)}d${warn ? ' ⚠' : ''}</span>`;
+}
+
+function stalePriceStr(lastUpdate) {
+  if (!lastUpdate) return '<span class="stale-warn">⚠ no data</span>';
+  const msAgo = Date.now() - new Date(lastUpdate);
+  const hrAgo = msAgo / 3600000;
+  if (hrAgo > 2) return `<span class="stale-warn">⚠ ${hrAgo.toFixed(1)}hr ago</span>`;
+  if (hrAgo > 0.5) return `<span style="color:#566877">${(msAgo/60000).toFixed(0)}m ago</span>`;
+  return `<span style="color:#22c55e">${(msAgo/1000).toFixed(0)}s ago</span>`;
+}
+
+function reasonTag(reason) {
+  const r = (reason || '').toLowerCase();
+  let cls = 'reason-tag';
+  if (r.includes('timeout'))  cls += ' timeout';
+  else if (r.includes('stop')) cls += ' stop';
+  else if (r.includes('profit')) cls += ' profit';
+  else if (r.includes('trail')) cls += ' trail';
+  return `<span class="${cls}">${reason || '—'}</span>`;
+}
+
+function srcPill(src) {
+  src = (src || 'ai').toLowerCase();
+  if (src.includes('arb') && src.includes('llm')) return '<span style="font-size:10px;color:#c4b5fd">MULTI</span>';
+  if (src.includes('arb'))      return '<span style="font-size:10px;color:#a5b4fc">ARB</span>';
+  if (src.includes('momentum')) return '<span style="font-size:10px;color:#7dd3fc">MOM</span>';
+  return '<span style="font-size:10px;color:#9ca3af">AI</span>';
+}
+
 let lastBalance = 1000;
+let _startISO   = null;
 
+// ── Render ───────────────────────────────────────────────────────────────────
 function render(data) {
-  // Stats
-  el('balance').textContent = '$' + data.balance.toFixed(2);
-  const pnl = data.combined_pnl || data.total_pnl || 0;
-  const startBal = 1000;
-  const pct = ((data.balance - startBal) / startBal * 100).toFixed(2);
-  el('pnl').textContent = sign(pnl) + fmt(pnl);
-  el('pnl').className = 'stat-value ' + pnlClass(pnl);
-  el('pnl-pct').textContent = sign(pct) + Math.abs(pct) + '% return';
+  const realisedPnl   = +(data.total_pnl   || 0);
+  const unrealisedPnl = +(data.unrealised_pnl || 0);
+  const combinedPnl   = +(data.combined_pnl || realisedPnl + unrealisedPnl);
 
-  const openPos = data.open_positions || [];
-  const closedTrades = data.closed_trades || [];
+  // Balance
+  el('balance').textContent = '$' + (+(data.balance)||0).toFixed(2);
 
-  el('open-pos').textContent = openPos.length;
-  el('closed-pos').textContent = closedTrades.length + ' closed';
-  el('open-count-badge').textContent = openPos.length + ' active';
+  // PnL
+  el('pnl').textContent = sign(combinedPnl) + fmt(combinedPnl);
+  el('pnl').className   = 'stat-value ' + pc(combinedPnl);
+  el('pnl-sub').textContent = `R: ${sign(realisedPnl)}${fmt(realisedPnl)} · U: ${sign(unrealisedPnl)}${fmt(unrealisedPnl)}`;
+
+  // Mode pill
+  const live = data.mode === 'LIVE';
+  const cb   = data.circuit_breaker;
+  const pill = el('status-pill');
+  if (cb) {
+    pill.className = 'status-pill halted';
+    el('mode-label').textContent = '⛔ CIRCUIT BREAKER';
+  } else {
+    pill.className = 'status-pill';
+    el('mode-label').textContent = (live ? 'LIVE' : 'PAPER') + ' · RUNNING';
+  }
+  el('cb-banner').classList.toggle('visible', !!cb);
+
+  const openPos      = data.open_positions  || [];
+  const closedTrades = data.closed_trades   || [];
+
+  el('open-pos').textContent           = openPos.length;
+  el('closed-pos').textContent         = closedTrades.length + ' closed';
+  el('open-count-badge').textContent   = openPos.length + ' active';
   el('closed-count-badge').textContent = closedTrades.length;
-
-  el('signals').textContent = data.signals_analyzed || 0;
-  el('scans').textContent = (data.scan_count || 0) + ' scans';
-  el('trades-taken').textContent = (data.trades_taken || 0) + ' trades';
+  el('signals').textContent            = data.signals_analyzed || 0;
+  el('scans').textContent              = (data.scan_count || 0) + ' scans';
+  el('trades-taken').textContent       = (data.trades_taken || 0) + ' trades';
 
   // Win rate
-  const wins = closedTrades.filter(t => t.pnl > 0).length;
-  el('winrate').textContent = closedTrades.length > 0
-    ? Math.round(wins / closedTrades.length * 100) + '%' : '—';
+  const wins = closedTrades.filter(t => (t.pnl || 0) > 0).length;
+  const wr   = closedTrades.length > 0 ? Math.round(wins / closedTrades.length * 100) + '%' : '—';
+  el('winrate').textContent = wr;
+  const wrN  = parseFloat(wr);
+  el('winrate').className   = 'stat-value ' + (isNaN(wrN) ? '' : wrN >= 55 ? 'pos' : wrN >= 40 ? '' : 'neg');
 
   // Uptime
   if (data.start_time) {
-    el('uptime').textContent = uptime(data.start_time);
+    if (!_startISO) _startISO = data.start_time;
+    el('uptime').textContent  = uptime(data.start_time);
     el('started').textContent = 'since ' + new Date(data.start_time).toLocaleTimeString();
   }
 
   // Equity chart
   if (data.balance !== lastBalance) {
-    const now = new Date().toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    const now = new Date().toLocaleTimeString('en-US', { hour12: false });
     equityData.labels.push(now);
-    equityData.datasets[0].data.push(data.balance);
+    equityData.datasets[0].data.push(+(data.balance)||0);
     if (equityData.labels.length > 60) {
       equityData.labels.shift();
       equityData.datasets[0].data.shift();
@@ -444,114 +571,147 @@ function render(data) {
     lastBalance = data.balance;
   }
 
-  // Open positions
+  // ── Open Positions ──
   const posEl = el('positions-body');
   if (openPos.length === 0) {
     posEl.innerHTML = '<div class="empty">No open positions yet.<br>Bot is scanning markets…</div>';
   } else {
     const rows = openPos.map(p => {
-      const pnl = p.pnl || 0;
-      const edgePct = Math.round(p.edge * 100);
-      const confPct = Math.round(p.claude_confidence * 100);
+      const pnl        = +(p.pnl) || 0;
+      const confPct    = Math.round((+(p.claude_confidence)||0) * 100);
+      const edgePct    = Math.round((+(p.edge)||0) * 100);
       const priceColor = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+      const gainPct    = p.entry_price ? ((p.current_price - p.entry_price) / p.entry_price * 100).toFixed(1) : '0';
+      const fetchedStr = p.market_fetched_at ? new Date(p.market_fetched_at).toLocaleTimeString() : '—';
+
       return `<tr>
         <td><span class="side-badge side-${p.side}">${p.side}</span></td>
-        <td><div class="q-text">${p.question}</div></td>
-        <td>${p.entry_price.toFixed(3)}</td>
-        <td style="color:${priceColor}">${(p.current_price||p.entry_price).toFixed(3)}</td>
-        <td class="${pnlClass(pnl)}">${sign(pnl)}${fmt(pnl)}</td>
+        <td><div class="q-text" title="${p.question}">${p.question}</div></td>
+        <td>${srcPill(p.source)}</td>
+        <td style="font-family:var(--mono)">${(+(p.entry_price)||0).toFixed(3)}</td>
+        <td style="font-family:var(--mono);color:${priceColor}">${(+(p.current_price||p.entry_price)||0).toFixed(3)}</td>
+        <td class="${pc(pnl)}" style="font-weight:700">${sign(pnl)}${fmt(pnl)} <span style="font-size:10px;opacity:.6">${gainPct}%</span></td>
+        <td>${holdDaysStr(p.timestamp)}</td>
+        <td>${stalePriceStr(p.last_price_update)}</td>
         <td>
           <div class="progress-bar"><div class="progress-fill" style="width:${confPct}%;background:${priceColor}"></div></div>
-          <div style="font-size:10px;color:var(--muted);margin-top:3px">${confPct}% conf · ${edgePct}% edge</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:2px">${confPct}% / ${edgePct}% edge</div>
         </td>
+        <td style="font-size:10px;color:var(--muted)">${fetchedStr}</td>
       </tr>`;
     }).join('');
     posEl.innerHTML = `<table class="pos-table">
       <thead><tr>
-        <th>Side</th><th>Market</th><th>Entry</th><th>Current</th><th>P&L</th><th>Confidence</th>
+        <th>Side</th><th>Market</th><th>Sig</th>
+        <th>Entry</th><th>Now</th><th>P&L</th>
+        <th>Hold</th><th>Last Price</th><th>Conf/Edge</th><th>Fetched At</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
   }
 
-  // Closed trades
+  // ── Closed Trades ──
   const closedEl = el('closed-body');
   if (closedTrades.length === 0) {
     closedEl.innerHTML = '<div class="empty">No closed trades yet.</div>';
   } else {
-    const rows = [...closedTrades].reverse().slice(0,20).map(t => {
-      const pnl = t.pnl || 0;
+    const rows = [...closedTrades].reverse().slice(0, 25).map(t => {
+      const pnl      = +(t.pnl) || 0;
+      const holdDays = t.timestamp && t.close_time
+        ? ((new Date(t.close_time) - new Date(t.timestamp)) / 86400000).toFixed(1) + 'd'
+        : '—';
       return `<div class="trade-row">
-        <div class="trade-q">${t.question}</div>
-        <span class="side-badge side-${t.side}" style="margin-right:10px">${t.side}</span>
-        <span class="trade-pnl ${pnlClass(pnl)}">${sign(pnl)}${fmt(pnl)}</span>
+        <div class="trade-q" title="${t.question}">${t.question}</div>
+        <span class="side-badge side-${t.side}" style="margin-right:6px">${t.side}</span>
+        ${reasonTag(t.reason)}
+        <span class="trade-meta">${holdDays}</span>
+        <span class="trade-pnl ${pc(pnl)}">${sign(pnl)}${fmt(pnl)}</span>
       </div>`;
     }).join('');
     closedEl.innerHTML = rows;
   }
 
-  // Log
+  // ── Log ──
   const logEl = el('log-box');
   if (data.log && data.log.length) {
-    const lines = [...data.log].reverse().slice(0,80).map(l => {
-      let cls = '';
-      if (l.includes('[OPEN]'))  cls = 'open';
-      else if (l.includes('[CLOSE')) cls = 'close';
-      else if (l.includes('[SKIP]') || l.includes('[API')) cls = 'skip';
-      else if (l.includes('ERROR')) cls = 'error';
-      return `<div class="log-line ${cls}">${l}</div>`;
+    const lines = [...data.log].reverse().slice(0, 100).map(l => {
+      let cls = 'log-line';
+      if (l.includes('CIRCUIT BREAKER'))             cls += ' circuit';
+      else if (l.includes('[OPEN]'))                 cls += ' open';
+      else if (l.includes('[CLOSE') || l.includes('TAKE_PROFIT')) cls += ' close';
+      else if (l.includes('TIMEOUT'))                cls += ' timeout';
+      else if (l.includes('STALE'))                  cls += ' stale';
+      else if (l.includes('[SKIP]') || l.includes('COOL')) cls += ' skip';
+      else if (l.includes('ERROR') || l.includes('FAIL'))  cls += ' error';
+      return `<div class="${cls}">${l}</div>`;
     }).join('');
     logEl.innerHTML = lines;
   }
 }
 
-// ── Load state from JSON file ──────────────────────────────────────────────
-// In a real setup, serve paper_trades.json via a local HTTP server.
-// This dashboard loads it from same directory.
+// ── Load data ─────────────────────────────────────────────────────────────────
 async function loadData() {
   try {
     const r = await fetch('paper_trades.json?t=' + Date.now());
     if (!r.ok) throw new Error('not found');
     const data = await r.json();
     render(data);
-  } catch(e) {
-    // Show mock/demo data when file not found
+  } catch (e) {
     render(getMockData());
   }
 }
 
+// Demo data — shown when paper_trades.json is not yet present
 function getMockData() {
   const now = new Date();
   return {
-    balance: 1000 + Math.random() * 50,
-    total_pnl: 10 + Math.random() * 40,
-    scan_count: Math.floor(Math.random()*5)+1,
-    signals_analyzed: Math.floor(Math.random()*30)+5,
-    trades_taken: Math.floor(Math.random()*6)+1,
-    start_time: new Date(now - 600_000).toISOString(),
+    balance: 1012.40,
+    total_pnl: 8.20,
+    unrealised_pnl: 4.20,
+    combined_pnl: 12.40,
+    scan_count: 3,
+    signals_analyzed: 18,
+    trades_taken: 4,
+    start_time: new Date(now - 900_000).toISOString(),
+    circuit_breaker: false,
     open_positions: [
-      { market_id:'1', question:'Will BTC close above $90k on Apr 15?', side:'YES',
-        entry_price:0.42, current_price:0.47, pnl:5.20, claude_confidence:0.72, edge:0.08 },
-      { market_id:'2', question:'NBA: Lakers to win next game?', side:'NO',
-        entry_price:0.45, current_price:0.41, pnl:3.10, claude_confidence:0.65, edge:0.06 },
+      {
+        market_id: '1', question: 'Will BTC close above $100k before June 2026?',
+        side: 'YES', entry_price: 0.28, current_price: 0.34, pnl: 4.20,
+        claude_confidence: 0.72, edge: 0.09, source: 'llm',
+        timestamp: new Date(now - 7200_000).toISOString(),
+        last_price_update: new Date(now - 90_000).toISOString(),
+        market_fetched_at: new Date(now - 7200_000).toISOString(),
+        opportunity_score: 0.312,
+      },
     ],
     closed_trades: [
-      { question:'EPL: Arsenal vs Chelsea', side:'YES', pnl:12.40 },
-      { question:'Will Fed cut rates in May?', side:'NO', pnl:-4.10 },
-      { question:'Will ETH hit $4k before May?', side:'NO', pnl:8.80 },
+      {
+        question: 'Will Fed cut rates in May 2026?', side: 'YES',
+        pnl: 8.20, reason: 'TAKE_PROFIT', entry_price: 0.22, close_price: 0.43,
+        timestamp: new Date(now - 172800_000).toISOString(),
+        close_time: new Date(now - 43200_000).toISOString(),
+        market_fetched_at: new Date(now - 172800_000).toISOString(),
+      },
+      {
+        question: 'Will OpenAI release GPT-5 before June 2026?', side: 'NO',
+        pnl: -3.10, reason: 'STOP_LOSS', entry_price: 0.44, close_price: 0.27,
+        timestamp: new Date(now - 259200_000).toISOString(),
+        close_time: new Date(now - 86400_000).toISOString(),
+        market_fetched_at: new Date(now - 259200_000).toISOString(),
+      },
     ],
     log: [
-      '[12:00:01] ── Scan #1 ──────────────────────────────',
-      '[12:00:02] Fetched 10 markets',
-      '[12:00:04] [OPEN] YES Will BTC close above $90k | edge=0.080 | size=$42.00',
-      '[12:00:06] [OPEN] NO NBA: Lakers to win next game | edge=0.060 | size=$35.00',
-      '[12:00:08] [SKIP] Will ETH hit $4k — Edge 0.020 < min 0.040',
-      '[12:00:10] Balance: $923.00 | PnL: +$8.30 | Open: 2',
+      '[12:01:00] ── Scan #3 [PAPER] ──────────────────────────',
+      '[12:01:02] [API] Fetched 187 CLOB-tradeable markets',
+      '[12:01:04] [SIGNAL ✓] YES Will BTC close above $100k | edge=0.090 conf=0.72 score=0.312',
+      '[12:01:06] [PAPER OPEN] YES Will BTC... | entry=0.280 size=$23.80',
+      '[12:01:08] Balance: $1012.40 | Realised: +$8.20 | Unrealised: +$4.20 | Combined: +$12.40',
     ]
   };
 }
 
-// ── Countdown & polling ────────────────────────────────────────────────────
+// ── Countdown & auto-refresh ──────────────────────────────────────────────────
 let secs = 10;
 loadData();
 setInterval(() => {
@@ -560,9 +720,9 @@ setInterval(() => {
   if (secs <= 0) { secs = 10; loadData(); }
 }, 1000);
 
-// Also tick uptime every second
+// Tick uptime every second without re-fetching
 setInterval(() => {
-  // just re-render uptime without re-fetching
+  if (_startISO) el('uptime').textContent = uptime(_startISO);
 }, 1000);
 </script>
 </body>
