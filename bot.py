@@ -1818,20 +1818,6 @@ tr:hover td{background:rgba(59,130,246,.04)}
 </div>
 <p class="sub">All 4 bugs fixed · Time-exit after <span id="max-hold-days">4</span>d · Exhaustive price refresh · Realistic TP 65¢ · Corrected trailing stop · Drawdown circuit breaker</p>
 
-<div class="fixes">
-  <strong>✅ Fixes Applied</strong>
-  <ul>
-    <li>Bug 1: Stale price detection + force time-exit</li>
-    <li>Bug 2: Exhaustive price refresh (all sources)</li>
-    <li>Bug 3: TP target 72¢→65¢, min gain 22¢→18¢</li>
-    <li>Bug 4: Trailing stop logic corrected</li>
-    <li>Extra: Circuit breaker on –25% drawdown</li>
-    <li>Extra: LLM retry with backoff on 429/5xx</li>
-    <li>Extra: Live mode mock-market guard</li>
-    <li>Extra: fetched_at + last_price_update tracking</li>
-  </ul>
-</div>
-
 <div class="circuit-breaker" id="circuit-breaker-banner">
   ⛔ <strong>CIRCUIT BREAKER ACTIVE</strong> — Balance fell below 75% floor. New position scanning is paused. Existing positions are still being managed (TP/SL/Timeout still fire).
 </div>
