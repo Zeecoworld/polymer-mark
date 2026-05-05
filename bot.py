@@ -1894,7 +1894,8 @@ function showTab(name){
 }
 
 async function loadAll(){
-  await Promise.all([loadState(),loadLedger()]);
+  await loadState();
+  await loadLedger();
 }
 
 async function loadState(){
