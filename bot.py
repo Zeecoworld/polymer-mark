@@ -12,15 +12,15 @@ FIXES APPLIED (from analysis doc):
   - Bug 3: TAKE_PROFIT_TARGET lowered 0.72→0.65, TAKE_PROFIT_MIN_GAIN 0.22→0.18
             so realistic 2–4 day prediction market moves can actually trigger TP.
   - Bug 4: Trailing stop conditions were mutually exclusive and never fired.
-            Rewritten: if gain > 30%, protect profits by exiting if price
-            retreats below entry + 10%.
+            Rewritten: Tracks highest_price high-water mark. If max gain > 30%, 
+            protect profits by exiting if price retreats below entry + 10%.
 
-ADDITIONAL PRODUCTION HARDENING:
-  - Max drawdown circuit breaker (halt at –25% balance loss)
+ADDITIONAL PRODUCTION HARDENING & FIXES:
+  - Max drawdown circuit breaker dynamically calculates floor based on starting balance
+  - Cooldown memory correctly prunes without double-counting expiry timers
   - Replicate API retry with exponential backoff on 429/5xx
   - Live mode mock-market guard (never trade mock_ IDs with real money)
   - fetched_at stamped on every Market; carried into Position as market_fetched_at
-  - last_price_update field on Position for staleness tracking
 
 CORE STRATEGY — "Buy Low, Sell High on Prediction Markets":
   - Scans 200 markets every cycle and RANKS them by opportunity score
@@ -111,21 +111,18 @@ SCAN_INTERVAL          = int(os.getenv("SCAN_INTERVAL",        "120"))
 MAX_POSITION_PCT       = float(os.getenv("MAX_POSITION_PCT",   "0.08"))
 MIN_EDGE_PCT           = float(os.getenv("MIN_EDGE_PCT",        "0.04"))
 MAX_OPEN_POSITIONS     = int(os.getenv("MAX_OPEN_POSITIONS",    "5"))
-COOLDOWN_SECONDS       = int(os.getenv("COOLDOWN_SECONDS",     "3600"))
+COOLDOWN_SECONDS       = int(os.getenv("COOLDOWN_SECONDS",      "3600"))
 
 # ── BUY-LOW / SELL-HIGH PRICE BANDS ──
 ENTRY_MIN_PRICE        = 0.12
 ENTRY_MAX_PRICE        = 0.45
-TAKE_PROFIT_TARGET     = 0.65   # FIX 3: lowered from 0.72 — realistic for 2–4 day holds
-TAKE_PROFIT_MIN_GAIN   = 0.18   # FIX 3: lowered from 0.22
+TAKE_PROFIT_TARGET     = 0.65   # lowered from 0.72 — realistic for 2–4 day holds
+TAKE_PROFIT_MIN_GAIN   = 0.18   # lowered from 0.22
 STOP_LOSS_PCT          = 0.40
 STOP_LOSS_FLOOR        = 0.07
 
-# ── FIX 1: Time & staleness guards ──
 MAX_HOLD_DAYS          = int(os.getenv("MAX_HOLD_DAYS", "4"))
 STALE_PRICE_HOURS      = 2.0
-
-# ── Circuit breaker — halt trading if balance falls below this fraction ──
 DRAWDOWN_HALT_PCT      = 0.75   # halt if balance < 75% of starting balance
 
 # Alerts
@@ -151,9 +148,7 @@ _LLM_SEM = asyncio.Semaphore(4)
 # Circuit breaker flag
 _trading_halted = False
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  STARTUP GUARDS
-# ──────────────────────────────────────────────────────────────────────────────
+
 if not REPLICATE_API_KEY:
     raise RuntimeError(
         "REPLICATE_API_KEY is not set.\n"
@@ -171,9 +166,7 @@ if LIVE_MODE:
     if _missing:
         raise RuntimeError(f"LIVE_MODE=true but missing env vars: {', '.join(_missing)}")
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  MARKET FILTERS
-# ──────────────────────────────────────────────────────────────────────────────
+
 
 SPORTS_BLOCK_KEYWORDS = [
     "nba","nfl","fifa","epl","soccer","football","basketball","tennis","golf",
@@ -275,9 +268,7 @@ def _question_too_similar(new_q: str, open_positions: list) -> bool:
     return False
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  REDIS CLIENT
-# ──────────────────────────────────────────────────────────────────────────────
+
 _redis = None
 _redis_available = False
 
@@ -315,6 +306,7 @@ async def redis_save_state(state_obj) -> bool:
         pipe = r.pipeline()
         pipe.set(RK_STATE, json.dumps({
             "balance":          state_obj.balance,
+            "starting_balance": state_obj.starting_balance, # FIX: Save dynamic starting balance
             "total_pnl":        state_obj.total_pnl,
             "scan_count":       state_obj.scan_count,
             "signals_analyzed": state_obj.signals_analyzed,
@@ -538,7 +530,7 @@ RSS_FEEDS = {
 
 _news_cache:      dict = {}
 _news_cache_time: dict = {}
-NEWS_CACHE_TTL        = 300
+NEWS_CACHE_TTL         = 300
 
 _http: Optional[httpx.AsyncClient] = None
 
@@ -665,7 +657,7 @@ class Market:
     description:  str = ""
     yes_token_id: str = ""
     no_token_id:  str = ""
-    fetched_at:   str = ""   # FIX: timestamp when this market data was pulled
+    fetched_at:   str = ""
 
 
 @dataclass
@@ -688,13 +680,15 @@ class Position:
     token_id:           str   = ""
     source:             str   = "ai"
     opportunity_score:  float = 0.0
-    last_price_update:  str   = ""   # FIX 1: track when price was last refreshed
-    market_fetched_at:  str   = ""   # FIX: when market data was fetched at entry
+    last_price_update:  str   = ""
+    market_fetched_at:  str   = ""
+    highest_price:      float = 0.0  # FIX: Added High-water mark for trailing stop
 
 
 @dataclass
 class BotState:
     balance:          float = PAPER_BALANCE_USDC
+    starting_balance: float = 0.0     # FIX: Track dynamically to prevent false circuit breaks
     total_pnl:        float = 0.0
     positions:        list  = field(default_factory=list)
     closed_trades:    list  = field(default_factory=list)
@@ -715,7 +709,9 @@ _recently_closed: dict[str, float] = {}
 def check_drawdown_halt() -> bool:
     """Returns True if trading should be halted due to drawdown."""
     global _trading_halted
-    floor = PAPER_BALANCE_USDC * DRAWDOWN_HALT_PCT
+    # FIX: Use dynamic starting balance, fallback to paper config if somehow 0
+    base = state.starting_balance if state.starting_balance > 0 else PAPER_BALANCE_USDC
+    floor = base * DRAWDOWN_HALT_PCT
     if state.balance < floor:
         if not _trading_halted:
             log_event(
@@ -759,6 +755,7 @@ async def load_saved_state():
         return
 
     state.balance          = float(saved.get("balance",          PAPER_BALANCE_USDC))
+    state.starting_balance = float(saved.get("starting_balance", state.balance)) # FIX: Load dynamic start
     state.total_pnl        = float(saved.get("total_pnl",        0.0))
     state.scan_count       = int(saved.get("scan_count",         0))
     state.signals_analyzed = int(saved.get("signals_analyzed",   0))
@@ -791,6 +788,7 @@ def _write_json_fallback():
         with open(LOG_FILE, "w", encoding="utf-8") as f:
             json.dump({
                 "balance":          state.balance,
+                "starting_balance": state.starting_balance, # FIX: Save dynamic start
                 "total_pnl":        state.total_pnl,
                 "unrealised_pnl":   round(unrealised_pnl, 4),
                 "combined_pnl":     round(state.total_pnl + unrealised_pnl, 4),
@@ -856,9 +854,10 @@ def prune_memory():
         _news_cache.pop(k, None)
         _news_cache_time.pop(k, None)
 
+    # FIX: Remove "+ COOLDOWN_SECONDS" which was incorrectly extending the timer 2x
     expired_cids = [
         cid for cid, expiry_ts in _recently_closed.items()
-        if now > expiry_ts + COOLDOWN_SECONDS
+        if now > expiry_ts
     ]
     for cid in expired_cids:
         del _recently_closed[cid]
@@ -870,7 +869,6 @@ def prune_memory():
 #  MARKET FETCHING
 # ──────────────────────────────────────────────────────────────────────────────
 async def fetch_markets(limit: int = 200) -> list[Market]:
-    # FIX: guard against mock data leaking into live mode
     try:
         http = await get_http()
         r    = await http.get(f"{GAMMA_API}/markets", params={
@@ -883,7 +881,7 @@ async def fetch_markets(limit: int = 200) -> list[Market]:
         if not isinstance(items, list):
             items = items.get("markets", [])
 
-        fetch_timestamp = datetime.now(timezone.utc).isoformat()  # FIX: stamp all markets
+        fetch_timestamp = datetime.now(timezone.utc).isoformat()
 
         markets: list[Market] = []
         for m in items:
@@ -916,7 +914,7 @@ async def fetch_markets(limit: int = 200) -> list[Market]:
                     category=m.get("category") or "misc",
                     description=(m.get("description") or "")[:400],
                     yes_token_id=yes_token, no_token_id=no_token,
-                    fetched_at=fetch_timestamp,   # FIX: carry timestamp
+                    fetched_at=fetch_timestamp,
                 ))
             except Exception:
                 continue
@@ -924,7 +922,6 @@ async def fetch_markets(limit: int = 200) -> list[Market]:
         return markets
     except Exception as e:
         log_event(f"[API ERROR] fetch_markets: {e} — using mock data")
-        # FIX: never use mock data in live mode — it would trade fake markets with real money
         if LIVE_MODE:
             log_event("[LIVE GUARD] Skipping mock fallback in LIVE mode — returning empty list")
             await send_alert("⚠️ fetch_markets() failed in LIVE mode — no trades this cycle")
@@ -942,7 +939,7 @@ def _mock_markets() -> list[Market]:
         ("Will NVDA stock be above $900 by June 2026?",        0.41, 0.59,   560_000, "finance"),
         ("Will US-Iran peace deal happen before 2027?",        0.14, 0.86,   320_000, "politics"),
         ("Will US enter recession by Q3 2026?",                0.35, 0.65,   780_000, "finance"),
-        ("Will OpenAI release GPT-5 before June 2026?",       0.44, 0.56,   290_000, "tech"),
+        ("Will OpenAI release GPT-5 before June 2026?",        0.44, 0.56,   290_000, "tech"),
         ("Will Trump impose 50%+ tariffs on China in 2026?",   0.39, 0.61,   450_000, "politics"),
         ("Will Greenland hold independence referendum 2026?",  0.17, 0.83,   210_000, "politics"),
     ]
@@ -963,8 +960,6 @@ def _mock_markets() -> list[Market]:
 
 
 async def fetch_single_market_price(market_id: str, side: str) -> Optional[float]:
-    # FIX 2: no longer skip mock_ market IDs — try REST anyway in case
-    # a real market has an ID that happens to start with "mock_"
     try:
         http = await get_http()
         r    = await http.get(f"{GAMMA_API}/markets/{market_id}")
@@ -1014,7 +1009,7 @@ def get_momentum_signal(condition_id: str, current_price: float) -> Optional[flo
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  LLM  (FIX: retry with exponential backoff on 429 / 5xx)
+#  LLM
 # ──────────────────────────────────────────────────────────────────────────────
 async def call_replicate_llama(prompt: str, max_retries: int = 3) -> str:
     system    = "You are a quantitative prediction market analyst. Always respond with valid JSON only. No markdown fences, no extra text."
@@ -1043,9 +1038,8 @@ async def call_replicate_llama(prompt: str, max_retries: int = 3) -> str:
             async with httpx.AsyncClient(timeout=60, follow_redirects=True) as http:
                 r = await http.post(url, headers=headers, json=payload)
 
-                # FIX: handle rate limits and server errors with backoff
                 if r.status_code == 429:
-                    wait = 2 ** attempt * 5  # 5s, 10s, 20s
+                    wait = 2 ** attempt * 5 
                     log_event(f"[LLM] Rate limited (429) — retry {attempt+1}/{max_retries} in {wait}s")
                     await asyncio.sleep(wait)
                     continue
@@ -1339,9 +1333,7 @@ async def analyse_market(market: Market) -> Optional[dict]:
     return signal
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  RISK MANAGER
-# ──────────────────────────────────────────────────────────────────────────────
+
 def risk_check(signal: dict, market: Market) -> tuple[bool, str]:
     edge       = signal["edge"]
     confidence = signal["confidence"]
@@ -1385,9 +1377,7 @@ def position_size(edge: float, confidence: float) -> float:
     return round(sized, 2)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  POSITION EXECUTION
-# ──────────────────────────────────────────────────────────────────────────────
+
 async def open_position(market: Market, signal: dict) -> Optional[Position]:
     # FIX: live mode guard — never open on mock market IDs
     if LIVE_MODE and market.id.startswith("mock_"):
@@ -1440,8 +1430,9 @@ async def open_position(market: Market, signal: dict) -> Optional[Position]:
         token_id=token_id,
         source=signal.get("source", "ai"),
         opportunity_score=signal.get("opportunity_score", 0.0),
-        last_price_update=now_ts,          # FIX 1: initialise staleness tracker
-        market_fetched_at=market.fetched_at,  # FIX: carry market fetch time
+        last_price_update=now_ts,
+        market_fetched_at=market.fetched_at,
+        highest_price=signal["entry_price"], 
     )
     state.positions.append(pos)
     state.trades_taken += 1
@@ -1460,7 +1451,6 @@ async def open_position(market: Market, signal: dict) -> Optional[Position]:
     return pos
 
 
-
 async def update_positions(markets: list[Market]):
     market_lookup = {m.condition_id: m for m in markets}
     market_lookup.update({m.id: m for m in markets})
@@ -1477,7 +1467,6 @@ async def update_positions(markets: list[Market]):
                     f"[TIMEOUT ⏱] {pos.question[:45]} — held {hold_days:.1f}d "
                     f"(max {MAX_HOLD_DAYS}d) — forcing close"
                 )
-                # Use last known price; it's the best we have
                 await _close_position(pos, pos.current_price, "TIMEOUT_EXIT")
                 continue
         except Exception:
@@ -1485,7 +1474,6 @@ async def update_positions(markets: list[Market]):
 
         new_price: Optional[float] = None
 
-        
         if pos.token_id:
             new_price = get_ws_price(pos.token_id)
 
@@ -1495,24 +1483,20 @@ async def update_positions(markets: list[Market]):
             except Exception:
                 pass
 
-       
         if new_price is None:
             live = market_lookup.get(pos.condition_id) or market_lookup.get(pos.market_id)
             if live:
                 new_price = live.yes_price if pos.side == "YES" else live.no_price
-
 
         if new_price is None:
             fetched = await fetch_single_market_price(pos.market_id, pos.side)
             if fetched is not None:
                 new_price = fetched
 
-        
         if new_price is not None:
-            pos.current_price    = new_price
+            pos.current_price     = new_price
             pos.last_price_update = now_utc.isoformat()
         else:
-            # Log how stale the price is becoming
             try:
                 last_ts = pos.last_price_update or pos.timestamp
                 last_update = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
@@ -1525,10 +1509,12 @@ async def update_positions(markets: list[Market]):
             except Exception:
                 pass
 
-       
         pos.pnl = round((pos.current_price - pos.entry_price) * pos.shares, 4)
 
-    
+        
+        if pos.current_price > pos.highest_price:
+            pos.highest_price = pos.current_price
+
         take_profit = min(TAKE_PROFIT_TARGET, pos.entry_price + TAKE_PROFIT_MIN_GAIN + 0.05)
         take_profit = max(take_profit, pos.entry_price + TAKE_PROFIT_MIN_GAIN)
 
@@ -1542,13 +1528,14 @@ async def update_positions(markets: list[Market]):
         elif pos.current_price <= stop_loss:
             await _close_position(pos, pos.current_price, "STOP_LOSS")
         else:
-            gain_pct = (pos.current_price - pos.entry_price) / max(pos.entry_price, 0.001)
-            if gain_pct > 0.30:
+            # FIX: Trailing stop correctly references highest historical price
+            max_gain_pct = (pos.highest_price - pos.entry_price) / max(pos.entry_price, 0.001)
+            if max_gain_pct > 0.30:
                 protect_floor = pos.entry_price * 1.10
                 if pos.current_price < protect_floor:
                     log_event(
                         f"[TRAILING STOP] {pos.question[:40]} — "
-                        f"rose {gain_pct*100:.0f}% then fell to {pos.current_price:.3f} "
+                        f"rose {max_gain_pct*100:.0f}% then fell to {pos.current_price:.3f} "
                         f"(floor={protect_floor:.3f})"
                     )
                     await _close_position(pos, pos.current_price, "TRAILING_STOP")
@@ -1597,9 +1584,7 @@ async def _close_position(pos: Position, price: float, reason: str):
     await save_state()
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  MAIN SCAN CYCLE
-# ──────────────────────────────────────────────────────────────────────────────
+
 async def _analyse_with_semaphore(market: Market) -> tuple[Market, Optional[dict]]:
     """Run analyse_market under the shared semaphore — prevents LLM flood."""
     async with _LLM_SEM:
@@ -1727,9 +1712,7 @@ async def scan_cycle():
     )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  WEB DASHBOARD
-# ──────────────────────────────────────────────────────────────────────────────
+
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2070,9 +2053,7 @@ setInterval(loadAll,20000);
 </html>"""
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  WEB SERVER HANDLERS
-# ──────────────────────────────────────────────────────────────────────────────
+
 async def _handle_root(request):
     return aio_web.Response(text=DASHBOARD_HTML, content_type="text/html")
 
@@ -2161,7 +2142,7 @@ async def start_web():
     await runner.setup()
     port = int(os.getenv("PORT", 8080))
     await aio_web.TCPSite(runner, "0.0.0.0", port).start()
-    log_event(f"Dashboard → http://0.0.0.0:{port}")
+    log_event(f"Dashboard → https://polymer-mark.onrender.com:{port}")
 
 
 async def self_ping():
@@ -2170,15 +2151,13 @@ async def self_ping():
     while True:
         try:
             http = await get_http()
-            await http.get(f"http://localhost:{port}/health")
+            await http.get(f"https://polymer-mark.onrender.com/:{port}/health")
         except Exception:
             pass
         await asyncio.sleep(600)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  MAIN BOOT
-# ──────────────────────────────────────────────────────────────────────────────
+
 async def bot_loop():
     await start_web()
     asyncio.create_task(self_ping())
@@ -2200,6 +2179,15 @@ async def bot_loop():
             })
             log_event(f"[REDIS] Ledger reset — resynced to ${state.total_pnl:+.2f}")
 
+    if LIVE_MODE:
+        live_bal = await clob_get_balance()
+        if live_bal > 0:
+            state.balance = live_bal
+            log_event(f"[LIVE] Chain balance synced: ${live_bal:.2f} USDC")
+            
+    if state.starting_balance <= 0:
+        state.starting_balance = state.balance
+
     mode_str  = "🔴 LIVE TRADING — REAL MONEY" if LIVE_MODE else "📄 PAPER TRADING (safe)"
     r         = await get_redis()
     store_str = f"Redis ({REDIS_URL[:25]}…)" if (r is not None and _redis_available) else "JSON file"
@@ -2220,10 +2208,6 @@ async def bot_loop():
     log_event("─" * 60)
 
     if LIVE_MODE:
-        live_bal = await clob_get_balance()
-        if live_bal > 0:
-            state.balance = live_bal
-            log_event(f"[LIVE] Chain balance synced: ${live_bal:.2f} USDC")
         await send_alert(
             f"🤖 PolyBot v4.1 LIVE started (bug-fixed)\n"
             f"Strategy: Buy $0.12–$0.45 → Sell $0.65+, force-exit {MAX_HOLD_DAYS}d\n"
