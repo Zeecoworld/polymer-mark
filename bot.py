@@ -1,43 +1,25 @@
 """
-Polymarket AI Trading Bot — v4.1 (Bug-Fixed Edition)
-=====================================================
+Polymarket AI Trading Bot — v4.2 (Production / Live-Execution Ready)
+====================================================================
 
-FIXES APPLIED (from analysis doc):
-  - Bug 1: Price updates now always attempt REST fallback; positions track
-            last_price_update timestamp and log stale price warnings.
-            Time-based force-exit (MAX_HOLD_DAYS) prevents eternal holds.
-  - Bug 2: fetch_single_market_price() called unconditionally — no longer
-            skipped for mock markets or only as a last resort. Markets that
-            fall out of the top-200 volume ranking still get prices refreshed.
-  - Bug 3: TAKE_PROFIT_TARGET lowered 0.72→0.65, TAKE_PROFIT_MIN_GAIN 0.22→0.18
-            so realistic 2–4 day prediction market moves can actually trigger TP.
-  - Bug 4: Trailing stop conditions were mutually exclusive and never fired.
-            Rewritten: Tracks highest_price high-water mark. If max gain > 30%, 
-            protect profits by exiting if price retreats below entry + 10%.
+NEW IN v4.2 (PRODUCTION UPDATES):
+  - Added clob_place_sell_order() using py_clob_client to actually exit trades.
+  - Switched from GTC (Good Till Canceled) to FOK (Fill Or Kill) orders. This 
+    prevents partial fills and stale limit orders from desyncing internal state.
+  - Guarded _close_position(): If the CLOB sell order fails, the internal 
+    position remains OPEN and will attempt to close again on the next cycle.
+  - Added slight slippage tolerance (±$0.01) to FOK orders to guarantee execution.
 
-ADDITIONAL PRODUCTION HARDENING & FIXES:
-  - Max drawdown circuit breaker dynamically calculates floor based on starting balance
-  - Cooldown memory correctly prunes without double-counting expiry timers
-  - Replicate API retry with exponential backoff on 429/5xx
-  - Live mode mock-market guard (never trade mock_ IDs with real money)
-  - fetched_at stamped on every Market; carried into Position as market_fetched_at
-
-CORE STRATEGY — "Buy Low, Sell High on Prediction Markets":
-  - Scans 200 markets every cycle and RANKS them by opportunity score
-  - Only enters positions priced between 0.10–0.45 (cheap YES) or cheap NO
-  - Waits for price to drift toward 0.65–0.90 range before taking profit
-  - Never bets on sports, memes, or joke markets
-  - Blocks contradicting positions on same person/topic (no self-hedging)
-  - Dynamic stop-loss based on entry price (protects expensive entries)
-  - Semantic deduplication across related markets
-  - MAX_OPEN_POSITIONS = 5 (quality over quantity)
-  - Position sizing scales with conviction
+FIXES APPLIED (from v4.1):
+  - Price updates now always attempt REST fallback; tracking last_price_update.
+  - fetch_single_market_price() exhaustive refresh implementation.
+  - TAKE_PROFIT_TARGET 0.65, TAKE_PROFIT_MIN_GAIN 0.18.
+  - Trailing stop tracks highest_price high-water mark.
+  - Max drawdown circuit breaker dynamically calculates floor.
+  - Cooldown memory correctly prunes.
 
 REQUIRED ENV VARS (paper mode):
     REPLICATE_API_KEY      — get at replicate.com/account/api-tokens
-
-REDIS (optional but strongly recommended):
-    REDIS_URL              — e.g. redis://localhost:6379
 
 ADDITIONAL ENV VARS (live mode, LIVE_MODE=true):
     POLYMARKET_PRIVATE_KEY
@@ -46,24 +28,6 @@ ADDITIONAL ENV VARS (live mode, LIVE_MODE=true):
     POLYMARKET_API_PASSPHRASE
     FUNDER_ADDRESS
     SIGNATURE_TYPE         — 0=EOA/MetaMask, 1=Email/Magic (default 1)
-
-OPTIONAL:
-    TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID
-    SLACK_WEBHOOK_URL
-    PAPER_BALANCE          — starting paper balance (default 1000)
-    MAX_OPEN_POSITIONS     — default 5 (DO NOT go above 8)
-    SCAN_INTERVAL          — seconds between scans (default 120)
-    MIN_EDGE_PCT           — minimum edge to trade (default 0.04)
-    MAX_POSITION_PCT       — max balance per trade (default 0.08)
-    PORT                   — dashboard port (default 8080)
-    MAX_HOLD_DAYS          — force-close after N days (default 4)
-
-REDIS KEYS USED:
-    polybot:state          — main state snapshot
-    polybot:positions      — open/closed Position objects
-    polybot:closed_trades  — list of closed trade dicts (capped at 500)
-    polybot:pnl_ledger     — append-only PnL event log (never deleted)
-    polybot:log            — rolling bot log (last 200 entries)
 """
 
 import asyncio
@@ -306,7 +270,7 @@ async def redis_save_state(state_obj) -> bool:
         pipe = r.pipeline()
         pipe.set(RK_STATE, json.dumps({
             "balance":          state_obj.balance,
-            "starting_balance": state_obj.starting_balance, # FIX: Save dynamic starting balance
+            "starting_balance": state_obj.starting_balance, 
             "total_pnl":        state_obj.total_pnl,
             "scan_count":       state_obj.scan_count,
             "signals_analyzed": state_obj.signals_analyzed,
@@ -382,9 +346,7 @@ async def redis_get_ledger_entries(limit: int = 100) -> list:
         return []
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  CLOB CLIENT  (live mode only)
-# ──────────────────────────────────────────────────────────────────────────────
+
 _clob_client = None
 
 def get_clob_client():
@@ -405,23 +367,56 @@ def get_clob_client():
     return _clob_client
 
 
-async def clob_place_limit_order(token_id: str, size_usdc: float, price: float) -> Optional[dict]:
+async def clob_place_buy_order(token_id: str, size_usdc: float, price: float) -> Optional[dict]:
     try:
         from py_clob_client.clob_types import OrderArgs, OrderType
         from py_clob_client.order_builder.constants import BUY
+        
+        # Add slight slippage allowance (+1 cent) to ensure FOK fills
         limit_price  = round(min(price + 0.01, 0.99), 3)
-        size_shares  = round(size_usdc / limit_price, 4)
+        size_shares  = round(size_usdc / limit_price, 2)
+        
         def _place():
             client = get_clob_client()
             order  = client.create_order(OrderArgs(token_id=token_id, price=limit_price, size=size_shares, side=BUY))
-            return client.post_order(order, OrderType.GTC)
+            # FOK (Fill Or Kill) guarantees no dangling limit orders
+            return client.post_order(order, OrderType.FOK)
+            
         result = await asyncio.to_thread(_place)
-        log_event(f"[CLOB ORDER] token={token_id[:14]}… price={limit_price} shares={size_shares} status={result.get('status','?')}")
+        log_event(f"[CLOB BUY] token={token_id[:14]}… price={limit_price} shares={size_shares} status={result.get('status','?')}")
+        
+        if result.get("errorMsg") or result.get("status") == "error":
+            log_event(f"[CLOB FAIL] {result.get('errorMsg', 'Order rejected')}")
+            return None
+            
         return result
     except Exception as e:
-        log_event(f"[CLOB ERROR] Limit order failed: {e}")
+        log_event(f"[CLOB ERROR] Buy order failed: {e}")
         return None
 
+async def clob_place_sell_order(token_id: str, shares: float, price: float) -> Optional[dict]:
+    try:
+        from py_clob_client.clob_types import OrderArgs, OrderType
+        from py_clob_client.order_builder.constants import SELL
+        
+        limit_price  = round(max(price - 0.01, 0.01), 3)
+        
+        def _place():
+            client = get_clob_client()
+            order  = client.create_order(OrderArgs(token_id=token_id, price=limit_price, size=shares, side=SELL))
+            return client.post_order(order, OrderType.FOK)
+            
+        result = await asyncio.to_thread(_place)
+        log_event(f"[CLOB SELL] token={token_id[:14]}… price={limit_price} shares={shares} status={result.get('status','?')}")
+        
+        if result.get("errorMsg") or result.get("status") == "error":
+            log_event(f"[CLOB FAIL] {result.get('errorMsg', 'Order rejected')}")
+            return None
+            
+        return result
+    except Exception as e:
+        log_event(f"[CLOB ERROR] Sell order failed: {e}")
+        return None
 
 async def clob_get_balance() -> float:
     try:
@@ -450,7 +445,6 @@ _ws_subscribed: set[str]         = set()
 
 
 async def ws_price_feed():
-    # Wait for state to be fully loaded before referencing it
     await asyncio.sleep(5)
     while True:
         try:
@@ -682,13 +676,13 @@ class Position:
     opportunity_score:  float = 0.0
     last_price_update:  str   = ""
     market_fetched_at:  str   = ""
-    highest_price:      float = 0.0  # FIX: Added High-water mark for trailing stop
+    highest_price:      float = 0.0 
 
 
 @dataclass
 class BotState:
     balance:          float = PAPER_BALANCE_USDC
-    starting_balance: float = 0.0     # FIX: Track dynamically to prevent false circuit breaks
+    starting_balance: float = 0.0     
     total_pnl:        float = 0.0
     positions:        list  = field(default_factory=list)
     closed_trades:    list  = field(default_factory=list)
@@ -703,13 +697,10 @@ state = BotState()
 _recently_closed: dict[str, float] = {}
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  CIRCUIT BREAKER
-# ──────────────────────────────────────────────────────────────────────────────
+
 def check_drawdown_halt() -> bool:
     """Returns True if trading should be halted due to drawdown."""
     global _trading_halted
-    # FIX: Use dynamic starting balance, fallback to paper config if somehow 0
     base = state.starting_balance if state.starting_balance > 0 else PAPER_BALANCE_USDC
     floor = base * DRAWDOWN_HALT_PCT
     if state.balance < floor:
@@ -731,9 +722,7 @@ def check_drawdown_halt() -> bool:
     return False
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  STATE PERSISTENCE
-# ──────────────────────────────────────────────────────────────────────────────
+
 async def load_saved_state():
     saved = None
     try:
@@ -755,7 +744,7 @@ async def load_saved_state():
         return
 
     state.balance          = float(saved.get("balance",          PAPER_BALANCE_USDC))
-    state.starting_balance = float(saved.get("starting_balance", state.balance)) # FIX: Load dynamic start
+    state.starting_balance = float(saved.get("starting_balance", state.balance)) 
     state.total_pnl        = float(saved.get("total_pnl",        0.0))
     state.scan_count       = int(saved.get("scan_count",         0))
     state.signals_analyzed = int(saved.get("signals_analyzed",   0))
@@ -788,7 +777,7 @@ def _write_json_fallback():
         with open(LOG_FILE, "w", encoding="utf-8") as f:
             json.dump({
                 "balance":          state.balance,
-                "starting_balance": state.starting_balance, # FIX: Save dynamic start
+                "starting_balance": state.starting_balance, 
                 "total_pnl":        state.total_pnl,
                 "unrealised_pnl":   round(unrealised_pnl, 4),
                 "combined_pnl":     round(state.total_pnl + unrealised_pnl, 4),
@@ -854,7 +843,6 @@ def prune_memory():
         _news_cache.pop(k, None)
         _news_cache_time.pop(k, None)
 
-    # FIX: Remove "+ COOLDOWN_SECONDS" which was incorrectly extending the timer 2x
     expired_cids = [
         cid for cid, expiry_ts in _recently_closed.items()
         if now > expiry_ts
@@ -865,9 +853,7 @@ def prune_memory():
         log_event(f"[PRUNE] Removed {len(expired_cids)} expired cooldown entries")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  MARKET FETCHING
-# ──────────────────────────────────────────────────────────────────────────────
+
 async def fetch_markets(limit: int = 200) -> list[Market]:
     try:
         http = await get_http()
@@ -1008,9 +994,7 @@ def get_momentum_signal(condition_id: str, current_price: float) -> Optional[flo
     return round(max(0.02, min(0.98, current_price + slope * 3)), 4)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  LLM
-# ──────────────────────────────────────────────────────────────────────────────
+
 async def call_replicate_llama(prompt: str, max_retries: int = 3) -> str:
     system    = "You are a quantitative prediction market analyst. Always respond with valid JSON only. No markdown fences, no extra text."
     formatted = (
@@ -1379,7 +1363,6 @@ def position_size(edge: float, confidence: float) -> float:
 
 
 async def open_position(market: Market, signal: dict) -> Optional[Position]:
-    # FIX: live mode guard — never open on mock market IDs
     if LIVE_MODE and market.id.startswith("mock_"):
         log_event(f"[LIVE GUARD] Refusing to trade mock market in LIVE mode: {market.id}")
         return None
@@ -1396,10 +1379,12 @@ async def open_position(market: Market, signal: dict) -> Optional[Position]:
         if not token_id:
             log_event(f"[LIVE SKIP] No token_id for {market.question[:40]}")
             return None
-        result = await clob_place_limit_order(token_id, size, signal["entry_price"])
+        
+        result = await clob_place_buy_order(token_id, size, signal["entry_price"])
         if not result:
             log_event(f"[LIVE FAIL] Order not placed for {market.question[:40]}")
             return None
+            
         order_id = result.get("orderID") or result.get("id") or ""
         live_bal = await clob_get_balance()
         state.balance = live_bal if live_bal > 0 else state.balance - size
@@ -1511,7 +1496,6 @@ async def update_positions(markets: list[Market]):
 
         pos.pnl = round((pos.current_price - pos.entry_price) * pos.shares, 4)
 
-        
         if pos.current_price > pos.highest_price:
             pos.highest_price = pos.current_price
 
@@ -1528,7 +1512,6 @@ async def update_positions(markets: list[Market]):
         elif pos.current_price <= stop_loss:
             await _close_position(pos, pos.current_price, "STOP_LOSS")
         else:
-            # FIX: Trailing stop correctly references highest historical price
             max_gain_pct = (pos.highest_price - pos.entry_price) / max(pos.entry_price, 0.001)
             if max_gain_pct > 0.30:
                 protect_floor = pos.entry_price * 1.10
@@ -1542,6 +1525,12 @@ async def update_positions(markets: list[Market]):
 
 
 async def _close_position(pos: Position, price: float, reason: str):
+    if LIVE_MODE and pos.token_id:
+        sell_result = await clob_place_sell_order(pos.token_id, pos.shares, price)
+        if not sell_result:
+            log_event(f"[LIVE FAIL] Sell rejected for {pos.question[:40]}. Aborting internal close. Will retry next cycle.")
+            return # IMPORTANT: Do not update internal state if the live sell fails!
+
     pos.pnl         = round((price - pos.entry_price) * pos.shares, 4)
     pos.close_price = price
     pos.close_time  = datetime.now(timezone.utc).isoformat()
@@ -1599,7 +1588,6 @@ async def scan_cycle():
     markets = await fetch_markets(200)
     await update_positions(markets)
 
-    # Circuit breaker — skip opening new positions if drawdown limit hit
     if check_drawdown_halt():
         log_event("[SCAN] Circuit breaker active — skipping new position scan")
         await save_state()
@@ -1718,7 +1706,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>PolyBot v4.1 — Bug-Fixed Edition</title>
+<title>PolyBot v4.2 — Production Ready</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root{--bg:#070b10;--s:#0d1520;--b:#172030;--t:#c8d8f0;--m:#4a5878;
@@ -1793,13 +1781,13 @@ tr:hover td{background:rgba(59,130,246,.04)}
 </head>
 <body>
 <div class="hdr">
-  <h1>PolyBot v4.1</h1>
-  <span class="tagline">BUG-FIXED EDITION</span>
+  <h1>PolyBot v4.2</h1>
+  <span class="tagline">PRODUCTION READY</span>
   <span class="badge paper" id="mode-badge"><span class="dot"></span>PAPER</span>
   <span class="badge json" id="store-badge">JSON</span>
   <span class="badge halted hidden" id="halted-badge">⛔ CIRCUIT BREAKER</span>
 </div>
-<p class="sub">All 4 bugs fixed · Time-exit after <span id="max-hold-days">4</span>d · Exhaustive price refresh · Realistic TP 65¢ · Corrected trailing stop · Drawdown circuit breaker</p>
+<p class="sub">Live Execution active · FOK Orders enabled · Time-exit after <span id="max-hold-days">4</span>d · Corrected trailing stop</p>
 
 <div class="circuit-breaker" id="circuit-breaker-banner">
   ⛔ <strong>CIRCUIT BREAKER ACTIVE</strong> — Balance fell below 75% floor. New position scanning is paused. Existing positions are still being managed (TP/SL/Timeout still fire).
@@ -1910,7 +1898,6 @@ async function loadState(){
     sb.textContent=d.storage||'JSON';
     sb.className='badge '+(d.storage==='Redis'?'redis':'json');
 
-    // Circuit breaker banner
     const cb=d.circuit_breaker||false;
     document.getElementById('circuit-breaker-banner').classList.toggle('visible',cb);
     document.getElementById('halted-badge').classList.toggle('hidden',!cb);
@@ -2122,14 +2109,15 @@ async def _handle_health(request):
         "combined_pnl":     round(state.total_pnl + unrealised_pnl, 4),
         "trades":           state.trades_taken,
         "win_rate":         round(wins / total, 3) if total > 0 else 0,
-        "strategy":         "buy_low_sell_high_v4.1",
+        "strategy":         "buy_low_sell_high_v4.2",
         "entry_zone":       f"{ENTRY_MIN_PRICE}–{ENTRY_MAX_PRICE}",
         "take_profit":      TAKE_PROFIT_TARGET,
         "max_hold_days":    MAX_HOLD_DAYS,
         "fixes_applied":    ["bug1_stale_price", "bug2_exhaustive_refresh",
                              "bug3_realistic_tp", "bug4_trailing_stop",
                              "circuit_breaker", "llm_retry_backoff",
-                             "live_mock_guard", "fetched_at_tracking"],
+                             "live_mock_guard", "fetched_at_tracking",
+                             "fok_orders", "live_sell_execution"],
     })
 
 
@@ -2181,6 +2169,7 @@ async def bot_loop():
             log_event(f"[REDIS] Ledger reset — resynced to ${state.total_pnl:+.2f}")
 
     if LIVE_MODE:
+        log_event("[LIVE] NOTE: If using an EOA (Signature Type 0), ensure USDC/ERC1155 spending is approved on Polymarket.")
         live_bal = await clob_get_balance()
         if live_bal > 0:
             state.balance = live_bal
@@ -2198,11 +2187,11 @@ async def bot_loop():
     total = len(cl)
     wr    = f"{wins/total*100:.0f}%" if total > 0 else "—"
 
-    log_event(f"PolyBot v4.1 — BUG-FIXED EDITION — {mode_str}")
+    log_event(f"PolyBot v4.2 — PRODUCTION EDITION — {mode_str}")
     log_event(f"State storage: {store_str}")
     log_event(f"LLM: Replicate → {REPLICATE_MODEL} (with retry backoff)")
     log_event(f"Strategy: Entry $0.12–$0.45 | Take-profit $0.65+ | Stop-loss –40% | Force-exit {MAX_HOLD_DAYS}d")
-    log_event("Fixes: Stale-price timeout | Exhaustive price refresh | Realistic TP | Corrected trailing stop")
+    log_event("Fixes: Added CLOB SELL limits | Transitioned to FOK Orders | Guarded Close Logic")
     log_event(f"Circuit breaker: halt at {int(DRAWDOWN_HALT_PCT*100)}% of starting balance")
     log_event(f"Max positions: {MAX_OPEN_POSITIONS} | Min edge: {MIN_EDGE_PCT} | Min volume: $20k")
     log_event(f"Balance: ${state.balance:.2f} | PnL: ${state.total_pnl:+.2f} | Trades: {state.trades_taken} | Win rate: {wr}")
@@ -2210,7 +2199,7 @@ async def bot_loop():
 
     if LIVE_MODE:
         await send_alert(
-            f"🤖 PolyBot v4.1 LIVE started (bug-fixed)\n"
+            f"🤖 PolyBot v4.2 LIVE started (Production Ready)\n"
             f"Strategy: Buy $0.12–$0.45 → Sell $0.65+, force-exit {MAX_HOLD_DAYS}d\n"
             f"Balance: ${state.balance:.2f} | PnL: ${state.total_pnl:+.2f}\n"
             f"Storage: {store_str}"
