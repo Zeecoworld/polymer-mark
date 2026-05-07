@@ -355,15 +355,23 @@ def get_clob_client():
         return _clob_client
     try:
         from py_clob_client.client import ClobClient
+        from py_clob_client.clob_types import ApiCreds
     except ImportError:
         raise RuntimeError("py-clob-client not installed.\nRun: pip install py-clob-client")
+    
     _clob_client = ClobClient(
         host=CLOB_HOST, chain_id=137,
         key=POLYMARKET_PRIVATE_KEY,
         signature_type=SIGNATURE_TYPE,
         funder=FUNDER_ADDRESS,
     )
-    _clob_client.set_api_creds(_clob_client.create_or_derive_api_creds())
+    
+    creds = ApiCreds(
+        api_key=POLYMARKET_API_KEY_VAL,
+        api_secret=POLYMARKET_API_SECRET,
+        api_passphrase=POLYMARKET_API_PASS
+    )
+    _clob_client.set_api_creds(creds)
     return _clob_client
 
 
