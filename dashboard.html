@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>PolyBot v4.1 — Bug-Fixed Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PolyBot v4.1 — Responsive Dashboard</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -55,6 +55,7 @@
     max-width: 1400px;
     margin: 0 auto;
     padding: 16px 12px;
+    width: 100%;
   }
 
   /* ── Header ── */
@@ -65,7 +66,7 @@
     margin-bottom: 16px;
     padding-bottom: 14px;
     border-bottom: 1px solid var(--border);
-    gap: 10px;
+    gap: 12px;
     flex-wrap: wrap;
   }
   .brand { display: flex; align-items: center; gap: 12px; }
@@ -118,13 +119,14 @@
     color: #fca5a5;
     display: none;
     line-height: 1.5;
+    word-break: break-word;
   }
   .cb-banner.visible { display: block; }
 
   /* ── Stat Cards ── */
   .stats-grid {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     gap: 10px;
     margin-bottom: 16px;
   }
@@ -136,6 +138,9 @@
     position: relative;
     overflow: hidden;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
   }
   .stat-card::after {
     content: '';
@@ -145,17 +150,22 @@
     background: var(--accent, var(--green));
   }
   .stat-label { font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
-  .stat-value { font-family: var(--sans); font-size: 22px; font-weight: 800; color: #fff; line-height: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .stat-value { font-family: var(--sans); font-size: clamp(18px, 4vw, 22px); font-weight: 800; color: #fff; line-height: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .stat-sub   { font-size: 10px; color: var(--muted); margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pos { color: var(--green) !important; }
   .neg { color: var(--red) !important; }
 
-  /* ── Two-col layout ── */
+  /* ── Main Layout Grids ── */
   .main-grid {
     display: grid;
     grid-template-columns: 1fr 340px;
     gap: 14px;
     margin-bottom: 14px;
+  }
+  .bottom-grid {
+    display: grid; 
+    grid-template-columns: 1fr 1fr; 
+    gap: 14px; 
   }
 
   /* ── Panel ── */
@@ -165,6 +175,8 @@
     border-radius: 12px;
     overflow: hidden;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
   }
   .panel-header {
     display: flex; align-items: center; justify-content: space-between;
@@ -172,13 +184,31 @@
     border-bottom: 1px solid var(--border);
     background: var(--surface2);
     gap: 8px;
+    flex-wrap: wrap;
   }
   .panel-title { font-family: var(--sans); font-weight: 700; font-size: 13px; color: #fff; white-space: nowrap; }
   .panel-badge { font-size: 10px; padding: 3px 8px; border-radius: 99px; background: var(--border); color: var(--muted); white-space: nowrap; flex-shrink: 0; }
 
-  /* ── Positions table — desktop ── */
-  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-  .pos-table { width: 100%; border-collapse: collapse; min-width: 700px; }
+  /* ── Equity Chart ── */
+  .equity-chart-wrapper {
+    position: relative;
+    width: 100%;
+    height: 120px;
+    padding: 10px;
+  }
+  canvas { width: 100% !important; height: 100% !important; }
+
+  /* ── Positions table (Horizontally Scrollable) ── */
+  .table-scroll { 
+    overflow-x: auto; 
+    -webkit-overflow-scrolling: touch; 
+    width: 100%; 
+  }
+  .pos-table { 
+    width: 100%; 
+    border-collapse: collapse; 
+    min-width: 700px; /* Forces horizontal scroll on mobile */
+  }
   .pos-table th {
     font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase;
     color: var(--muted); padding: 10px 12px; text-align: left;
@@ -186,51 +216,12 @@
     white-space: nowrap;
   }
   .pos-table td { padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
-  .pos-table tr:last-child td { border-bottom: none; }
   .pos-table tr:hover td { background: rgba(255,255,255,0.02); }
 
-  /* ── Positions — mobile card layout ── */
-  .pos-card {
-    padding: 14px 16px;
-    border-bottom: 1px solid var(--border);
-  }
-  .pos-card:last-child { border-bottom: none; }
-  .pos-card-header {
-    display: flex; align-items: flex-start; justify-content: space-between;
-    gap: 8px; margin-bottom: 10px;
-  }
-  .pos-card-q {
-    font-size: 12px; color: var(--text); line-height: 1.4;
-    flex: 1; min-width: 0;
-  }
-  .pos-card-pnl {
-    font-family: var(--sans); font-size: 16px; font-weight: 800;
-    white-space: nowrap;
-  }
-  .pos-card-row {
-    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
-    font-size: 11px; color: var(--muted);
-  }
-  .pos-card-chip {
-    display: flex; align-items: center; gap: 4px;
-    background: var(--surface2); border: 1px solid var(--border);
-    border-radius: 6px; padding: 3px 8px;
-    font-size: 10px; white-space: nowrap;
-  }
-  .pos-card-chip span { color: var(--text); }
-  .pos-card-bar {
-    display: flex; align-items: center; gap: 6px; margin-top: 10px;
-  }
-  .progress-bar {
-    flex: 1; height: 4px; background: var(--border); border-radius: 99px; overflow: hidden;
-  }
+  .progress-bar { flex: 1; height: 4px; background: var(--border); border-radius: 99px; overflow: hidden; min-width: 60px; }
   .progress-fill { height: 100%; border-radius: 99px; }
 
-  .side-badge {
-    display: inline-block; padding: 2px 8px; border-radius: 4px;
-    font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
-    flex-shrink: 0;
-  }
+  .side-badge { display: inline-flex; align-items: center; justify-content: center; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.5px; flex-shrink: 0; }
   .side-YES { background: rgba(0,229,160,0.12); color: var(--green); border: 1px solid rgba(0,229,160,0.25); }
   .side-NO  { background: rgba(255,69,96,0.12);  color: var(--red);   border: 1px solid rgba(255,69,96,0.25); }
 
@@ -238,10 +229,7 @@
 
   .stale-warn { color: var(--yellow); font-size: 10px; }
   .hold-warn  { color: var(--yellow); }
-  .reason-tag {
-    font-size: 10px; padding: 1px 6px; border-radius: 3px;
-    background: var(--border); color: var(--muted);
-  }
+  .reason-tag { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: var(--border); color: var(--muted); white-space: nowrap; }
   .reason-tag.timeout { background: rgba(249,115,22,0.15); color: var(--orange); }
   .reason-tag.stop    { background: rgba(255,69,96,0.12); color: var(--red); }
   .reason-tag.profit  { background: rgba(0,229,160,0.12); color: var(--green); }
@@ -249,15 +237,13 @@
 
   /* ── Log panel ── */
   .log-box {
-    height: 280px; overflow-y: auto;
-    padding: 10px;
-    font-size: 10px; line-height: 1.9;
-    color: var(--muted);
+    height: 280px; overflow-y: auto; padding: 10px;
+    font-size: 10px; line-height: 1.9; color: var(--muted);
   }
   .log-box::-webkit-scrollbar { width: 3px; }
   .log-box::-webkit-scrollbar-track { background: transparent; }
   .log-box::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
-  .log-line { padding: 1px 0; border-bottom: 1px solid rgba(255,255,255,0.02); word-break: break-all; }
+  .log-line { padding: 2px 0; border-bottom: 1px solid rgba(255,255,255,0.02); word-break: break-all; }
   .log-line.open     { color: var(--green); }
   .log-line.close    { color: var(--blue); }
   .log-line.skip     { color: var(--muted); }
@@ -266,18 +252,11 @@
   .log-line.timeout  { color: var(--orange); }
   .log-line.circuit  { color: var(--red); font-weight: bold; }
 
-  /* ── Equity Chart ── */
-  .equity-chart { padding: 14px 16px 8px; }
-  canvas { width: 100% !important; }
-
-  /* ── Bottom Grid ── */
-  .bottom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-
   /* ── Trade row ── */
   .trade-row {
     display: flex; align-items: flex-start; flex-wrap: wrap;
-    padding: 10px 16px; border-bottom: 1px solid var(--border);
-    font-size: 12px; gap: 6px;
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+    font-size: 12px; gap: 8px;
   }
   .trade-row:last-child { border-bottom: none; }
   .trade-q { width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); font-size: 11px; }
@@ -290,73 +269,48 @@
   .config-body > div { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
   /* ── Footer ── */
-  .refresh-info {
-    text-align: center; font-size: 10px; color: var(--muted);
-    padding: 14px; letter-spacing: 0.5px;
-  }
+  .refresh-info { text-align: center; font-size: 10px; color: var(--muted); padding: 14px; letter-spacing: 0.5px; }
   #countdown { color: var(--green); }
 
-  /* ── Empty state ── */
-  .empty { padding: 32px; text-align: center; color: var(--muted); font-size: 12px; line-height: 1.6; }
+  .empty { padding: 32px 16px; text-align: center; color: var(--muted); font-size: 12px; line-height: 1.6; }
 
-  /* ── Scrollable panel bodies — desktop/tablet only ── */
-  .panel-scroll {
-    overflow-y: auto;
-    overflow-x: hidden;
-    -webkit-overflow-scrolling: touch;
-    max-height: 440px;
-  }
-  .panel-scroll::-webkit-scrollbar { width: 3px; }
+  /* Desktop Scroll Settings */
+  .panel-scroll { overflow-y: auto; overflow-x: auto; -webkit-overflow-scrolling: touch; max-height: 440px; }
+  .panel-scroll::-webkit-scrollbar { width: 3px; height: 3px; }
   .panel-scroll::-webkit-scrollbar-track { background: transparent; }
   .panel-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
 
   /* ── RESPONSIVE BREAKPOINTS ── */
 
-  /* Tablet */
-  @media (max-width: 900px) {
+  /* Tablet & Smaller Desktop */
+  @media (max-width: 1024px) {
     .main-grid { grid-template-columns: 1fr; }
     .bottom-grid { grid-template-columns: 1fr; }
-    .log-box { height: 220px; }
-    .panel-scroll { max-height: 380px; }
+    .log-box { height: 240px; }
   }
 
-  /* Mobile — panels expand fully, PAGE scrolls */
+  /* Core Mobile Screen */
   @media (max-width: 600px) {
-    .wrapper { padding: 12px 10px; }
-    header { margin-bottom: 12px; }
+    .wrapper { padding: 10px 8px; }
+    header { margin-bottom: 12px; gap: 8px; }
     .brand-name { font-size: 15px; }
+    
+    .stats-grid { gap: 8px; grid-template-columns: repeat(2, 1fr); }
+    .stat-card { padding: 10px 12px; border-radius: 10px; }
+    .stat-value { font-size: 18px; }
 
-    .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
-    .stat-card { padding: 12px; border-radius: 10px; }
-    .stat-value { font-size: 19px; }
-    .stat-sub { font-size: 9px; }
-
-    .equity-chart { padding: 10px 12px 6px; }
     .main-grid { gap: 10px; margin-bottom: 10px; }
     .bottom-grid { gap: 10px; }
 
-    /* KEY FIX: remove height cap so all content shows; page scrolls instead */
-    .panel-scroll {
-      max-height: none !important;
-      overflow-y: visible;
-      overflow-x: visible;
-    }
+    /* Expand panels to allow page scroll, but ensure x-axis scrolling is active for tables */
+    .panel-scroll { max-height: none !important; overflow-y: visible; overflow-x: auto; }
+    .log-box { height: 200px; font-size: 9.5px; }
 
-    /* Log box keeps its own fixed scroll */
-    .log-box { height: 200px; overflow-y: auto; font-size: 9.5px; }
-
-    /* Trade rows: full question wraps, meta below, PnL right-aligned */
-    .trade-row {
-      padding: 10px 12px;
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 5px;
-    }
-    .trade-q { white-space: normal; line-height: 1.4; font-size: 12px; }
+    .trade-row { padding: 10px 12px; flex-direction: column; align-items: flex-start; gap: 6px; }
+    .trade-q { white-space: normal; line-height: 1.4; font-size: 11.5px; }
     .trade-row-meta { width: 100%; flex-wrap: wrap; }
-    .trade-pnl { font-size: 14px; align-self: flex-end; }
+    .trade-pnl { align-self: flex-start; margin-top: 2px; }
 
-    /* Config: allow text to wrap */
     .config-body { padding: 12px; font-size: 10px; line-height: 2.1; }
     .config-body > div { white-space: normal; overflow: visible; text-overflow: unset; }
 
@@ -364,15 +318,11 @@
     .panel-title { font-size: 12px; }
   }
 
-  /* Desktop: hide mobile card layout, show table */
-  .pos-cards-mobile { display: none; }
-  @media (max-width: 600px) {
-    .table-scroll { display: none; }
-    .pos-cards-mobile { display: block; }
-  }
-  @media (min-width: 601px) {
-    .table-scroll { display: block; }
-    .pos-cards-mobile { display: none; }
+  /* Ultra-Small Screens */
+  @media (max-width: 380px) {
+    header { flex-direction: column; align-items: flex-start; gap: 10px; }
+    .header-right { width: 100%; justify-content: flex-start; }
+    .stats-grid { grid-template-columns: 1fr; }
   }
 </style>
 </head>
@@ -398,8 +348,7 @@
 
   <!-- Circuit Breaker Banner -->
   <div class="cb-banner" id="cb-banner">
-    ⛔ <strong>CIRCUIT BREAKER ACTIVE</strong> — Balance fell below 75% floor.
-    New position scanning is paused. Existing positions are still managed (TP / SL / Timeout still fire normally).
+    ⛔ <strong>CIRCUIT BREAKER ACTIVE</strong> — Balance fell below 75% floor. New position scanning is paused. Existing positions are still managed (TP / SL / Timeout still fire normally).
   </div>
 
   <!-- Stats -->
@@ -442,8 +391,8 @@
       <span class="panel-title">Equity Curve</span>
       <span class="panel-badge" id="eq-label">Paper Balance Over Time</span>
     </div>
-    <div class="equity-chart">
-      <canvas id="equityChart" height="90"></canvas>
+    <div class="equity-chart-wrapper">
+      <canvas id="equityChart"></canvas>
     </div>
   </div>
 
@@ -457,13 +406,8 @@
         <span class="panel-badge" id="open-count-badge">0 active</span>
       </div>
 
-      <!-- Desktop: scrollable table -->
+      <!-- Scrollable table wrapper -->
       <div class="panel-scroll table-scroll" id="positions-table-wrap">
-        <div class="empty">No open positions yet.<br>Bot is scanning markets…</div>
-      </div>
-
-      <!-- Mobile: card layout -->
-      <div class="panel-scroll pos-cards-mobile" id="positions-cards">
         <div class="empty">No open positions yet.<br>Bot is scanning markets…</div>
       </div>
     </div>
@@ -545,6 +489,7 @@ const chart = new Chart(ctx, {
   data: equityData,
   options: {
     responsive: true,
+    maintainAspectRatio: false,
     animation: { duration: 400 },
     plugins: {
       legend: { display: false },
@@ -582,12 +527,6 @@ function holdDaysStr(timestamp) {
   return `<span class="${warn ? 'hold-warn' : ''}">${days.toFixed(1)}d${warn ? ' ⚠' : ''}</span>`;
 }
 
-function holdDaysPlain(timestamp) {
-  if (!timestamp) return '—';
-  const days = (Date.now() - new Date(timestamp)) / 86400000;
-  return days.toFixed(1) + 'd' + (days > 3 ? ' ⚠' : '');
-}
-
 function stalePriceStr(lastUpdate) {
   if (!lastUpdate) return '<span class="stale-warn">⚠ no data</span>';
   const msAgo = Date.now() - new Date(lastUpdate);
@@ -595,15 +534,6 @@ function stalePriceStr(lastUpdate) {
   if (hrAgo > 2)   return `<span class="stale-warn">⚠ ${hrAgo.toFixed(1)}hr ago</span>`;
   if (hrAgo > 0.5) return `<span style="color:#566877">${(msAgo/60000).toFixed(0)}m ago</span>`;
   return `<span style="color:#22c55e">${(msAgo/1000).toFixed(0)}s ago</span>`;
-}
-
-function stalePricePlain(lastUpdate) {
-  if (!lastUpdate) return '⚠ no data';
-  const msAgo = Date.now() - new Date(lastUpdate);
-  const hrAgo = msAgo / 3600000;
-  if (hrAgo > 2)   return `⚠ ${hrAgo.toFixed(1)}hr ago`;
-  if (hrAgo > 0.5) return `${(msAgo/60000).toFixed(0)}m ago`;
-  return `${(msAgo/1000).toFixed(0)}s ago`;
 }
 
 function reasonTag(reason) {
@@ -685,7 +615,7 @@ function render(data) {
     lastBalance = data.balance;
   }
 
-  // ── Open Positions — Desktop Table ──
+  // ── Open Positions Table (Now for both Mobile and Desktop) ──
   const tableWrap = el('positions-table-wrap');
   if (openPos.length === 0) {
     tableWrap.innerHTML = '<div class="empty">No open positions yet.<br>Bot is scanning markets…</div>';
@@ -721,45 +651,6 @@ function render(data) {
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
-  }
-
-  // ── Open Positions — Mobile Cards ──
-  const cardsEl = el('positions-cards');
-  if (openPos.length === 0) {
-    cardsEl.innerHTML = '<div class="empty">No open positions yet.<br>Bot is scanning markets…</div>';
-  } else {
-    cardsEl.innerHTML = openPos.map(p => {
-      const pnl      = +(p.pnl) || 0;
-      const confPct  = Math.round((+(p.claude_confidence)||0) * 100);
-      const edgePct  = Math.round((+(p.edge)||0) * 100);
-      const priceColor = pnl >= 0 ? 'var(--green)' : 'var(--red)';
-      const gainPct  = p.entry_price ? ((p.current_price - p.entry_price) / p.entry_price * 100).toFixed(1) : '0';
-      return `<div class="pos-card">
-        <div class="pos-card-header">
-          <div style="display:flex;flex-direction:column;gap:5px;flex:1;min-width:0;">
-            <div style="display:flex;align-items:center;gap:6px;">
-              <span class="side-badge side-${p.side}">${p.side}</span>
-              ${srcPill(p.source)}
-            </div>
-            <div class="pos-card-q">${p.question}</div>
-          </div>
-          <div style="text-align:right;flex-shrink:0;margin-left:8px;">
-            <div class="pos-card-pnl ${pc(pnl)}">${sign(pnl)}${fmt(pnl)}</div>
-            <div style="font-size:10px;color:var(--muted)">${gainPct}%</div>
-          </div>
-        </div>
-        <div class="pos-card-row">
-          <div class="pos-card-chip"><span style="color:var(--muted)">Entry</span>&nbsp;<span>${(+(p.entry_price)||0).toFixed(3)}</span></div>
-          <div class="pos-card-chip"><span style="color:var(--muted)">Now</span>&nbsp;<span style="color:${priceColor}">${(+(p.current_price||p.entry_price)||0).toFixed(3)}</span></div>
-          <div class="pos-card-chip"><span style="color:var(--muted)">Hold</span>&nbsp;<span>${holdDaysPlain(p.timestamp)}</span></div>
-          <div class="pos-card-chip"><span style="color:var(--muted)">Price</span>&nbsp;<span>${stalePricePlain(p.last_price_update)}</span></div>
-        </div>
-        <div class="pos-card-bar">
-          <div style="font-size:10px;color:var(--muted);white-space:nowrap;">Conf ${confPct}% · Edge ${edgePct}%</div>
-          <div class="progress-bar"><div class="progress-fill" style="width:${confPct}%;background:${priceColor}"></div></div>
-        </div>
-      </div>`;
-    }).join('');
   }
 
   // ── Closed Trades ──
