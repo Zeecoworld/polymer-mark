@@ -299,11 +299,12 @@
   /* ── Empty state ── */
   .empty { padding: 32px; text-align: center; color: var(--muted); font-size: 12px; line-height: 1.6; }
 
-  /* ── Scrollable panel bodies (all sizes) ── */
+  /* ── Scrollable panel bodies — desktop/tablet only ── */
   .panel-scroll {
     overflow-y: auto;
+    overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
-    max-height: 420px;
+    max-height: 440px;
   }
   .panel-scroll::-webkit-scrollbar { width: 3px; }
   .panel-scroll::-webkit-scrollbar-track { background: transparent; }
@@ -316,40 +317,48 @@
     .main-grid { grid-template-columns: 1fr; }
     .bottom-grid { grid-template-columns: 1fr; }
     .log-box { height: 220px; }
-    .panel-scroll { max-height: 360px; }
+    .panel-scroll { max-height: 380px; }
   }
 
-  /* Mobile */
+  /* Mobile — panels expand fully, PAGE scrolls */
   @media (max-width: 600px) {
     .wrapper { padding: 12px 10px; }
-
     header { margin-bottom: 12px; }
     .brand-name { font-size: 15px; }
 
-    .stats-grid {
-      grid-template-columns: repeat(2, 1fr);
-      gap: 8px;
-    }
-    .stat-card { padding: 12px 12px; border-radius: 10px; }
+    .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    .stat-card { padding: 12px; border-radius: 10px; }
     .stat-value { font-size: 19px; }
     .stat-sub { font-size: 9px; }
 
     .equity-chart { padding: 10px 12px 6px; }
-
     .main-grid { gap: 10px; margin-bottom: 10px; }
-
-    /* Scrollable panel bodies on mobile */
-    .panel-scroll { max-height: 320px; }
-
-    /* Log */
-    .log-box { height: 200px; font-size: 9.5px; }
-
     .bottom-grid { gap: 10px; }
 
-    .trade-row { padding: 9px 12px; }
-    .trade-pnl { font-size: 13px; }
+    /* KEY FIX: remove height cap so all content shows; page scrolls instead */
+    .panel-scroll {
+      max-height: none !important;
+      overflow-y: visible;
+      overflow-x: visible;
+    }
 
-    .config-body { padding: 12px; font-size: 10px; line-height: 2; }
+    /* Log box keeps its own fixed scroll */
+    .log-box { height: 200px; overflow-y: auto; font-size: 9.5px; }
+
+    /* Trade rows: full question wraps, meta below, PnL right-aligned */
+    .trade-row {
+      padding: 10px 12px;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 5px;
+    }
+    .trade-q { white-space: normal; line-height: 1.4; font-size: 12px; }
+    .trade-row-meta { width: 100%; flex-wrap: wrap; }
+    .trade-pnl { font-size: 14px; align-self: flex-end; }
+
+    /* Config: allow text to wrap */
+    .config-body { padding: 12px; font-size: 10px; line-height: 2.1; }
+    .config-body > div { white-space: normal; overflow: visible; text-overflow: unset; }
 
     .panel-header { padding: 10px 12px; }
     .panel-title { font-size: 12px; }
