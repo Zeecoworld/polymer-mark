@@ -299,13 +299,24 @@
   /* ── Empty state ── */
   .empty { padding: 32px; text-align: center; color: var(--muted); font-size: 12px; line-height: 1.6; }
 
+  /* ── Scrollable panel bodies (all sizes) ── */
+  .panel-scroll {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    max-height: 420px;
+  }
+  .panel-scroll::-webkit-scrollbar { width: 3px; }
+  .panel-scroll::-webkit-scrollbar-track { background: transparent; }
+  .panel-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+
   /* ── RESPONSIVE BREAKPOINTS ── */
 
   /* Tablet */
   @media (max-width: 900px) {
     .main-grid { grid-template-columns: 1fr; }
     .bottom-grid { grid-template-columns: 1fr; }
-    .log-box { height: 200px; }
+    .log-box { height: 220px; }
+    .panel-scroll { max-height: 360px; }
   }
 
   /* Mobile */
@@ -315,7 +326,6 @@
     header { margin-bottom: 12px; }
     .brand-name { font-size: 15px; }
 
-    /* Stats: 2-col on mobile, balance + PnL get full row */
     .stats-grid {
       grid-template-columns: repeat(2, 1fr);
       gap: 8px;
@@ -324,30 +334,23 @@
     .stat-value { font-size: 19px; }
     .stat-sub { font-size: 9px; }
 
-    /* Equity chart less tall */
     .equity-chart { padding: 10px 12px 6px; }
 
-    /* Main grid single col */
     .main-grid { gap: 10px; margin-bottom: 10px; }
 
-    /* Hide desktop table, show mobile cards */
-    .table-scroll { display: none; }
-    .pos-cards-mobile { display: block; }
+    /* Scrollable panel bodies on mobile */
+    .panel-scroll { max-height: 320px; }
 
-    /* Log shorter on mobile */
-    .log-box { height: 180px; font-size: 9.5px; }
+    /* Log */
+    .log-box { height: 200px; font-size: 9.5px; }
 
-    /* Bottom grid */
     .bottom-grid { gap: 10px; }
 
-    /* Trade rows — tighter */
     .trade-row { padding: 9px 12px; }
     .trade-pnl { font-size: 13px; }
 
-    /* Config */
     .config-body { padding: 12px; font-size: 10px; line-height: 2; }
 
-    /* Panel headers */
     .panel-header { padding: 10px 12px; }
     .panel-title { font-size: 12px; }
   }
@@ -446,12 +449,12 @@
       </div>
 
       <!-- Desktop: scrollable table -->
-      <div class="table-scroll" id="positions-table-wrap">
+      <div class="panel-scroll table-scroll" id="positions-table-wrap">
         <div class="empty">No open positions yet.<br>Bot is scanning markets…</div>
       </div>
 
       <!-- Mobile: card layout -->
-      <div class="pos-cards-mobile" id="positions-cards">
+      <div class="panel-scroll pos-cards-mobile" id="positions-cards">
         <div class="empty">No open positions yet.<br>Bot is scanning markets…</div>
       </div>
     </div>
@@ -478,7 +481,7 @@
         <span class="panel-title">Closed Trades</span>
         <span class="panel-badge" id="closed-count-badge">0</span>
       </div>
-      <div id="closed-body">
+      <div class="panel-scroll" id="closed-body">
         <div class="empty">No closed trades yet.</div>
       </div>
     </div>
@@ -488,7 +491,7 @@
       <div class="panel-header">
         <span class="panel-title">Strategy Config — v4.1</span>
       </div>
-      <div class="config-body">
+      <div class="panel-scroll config-body">
         <div><span style="color:var(--muted)">Model ·</span> meta-llama-3-70b</div>
         <div><span style="color:var(--muted)">Strategy ·</span> Buy-Low / Sell-High</div>
         <div><span style="color:var(--muted)">Entry zone ·</span> <span style="color:var(--yellow)">$0.12 – $0.45</span></div>
