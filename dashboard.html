@@ -185,7 +185,8 @@
     background: var(--surface2);
     gap: 8px;
     flex-wrap: wrap;
-    z-index: 10; /* Keep header above scrolling content */
+    /* Must NOT be sticky itself — it's a flex child of .panel */
+    flex-shrink: 0; /* Prevent header from shrinking when panel has max-height */
   }
   .panel-title { font-family: var(--sans); font-weight: 700; font-size: 13px; color: #fff; white-space: nowrap; }
   .panel-badge { font-size: 10px; padding: 3px 8px; border-radius: 99px; background: var(--border); color: var(--muted); white-space: nowrap; flex-shrink: 0; }
@@ -198,27 +199,64 @@
     padding: 10px;
   }
   canvas { width: 100% !important; height: 100% !important; }
-  
+
+  /* ─────────────────────────────────────────────────────────────
+     POSITIONS TABLE — TWO-LAYER SCROLL ARCHITECTURE
+     Layer 1 (.positions-outer): vertical scroll, fixed max-height
+     Layer 2 (.positions-inner): horizontal scroll for the table
+     The sticky <thead> sticks inside Layer 1.
+  ───────────────────────────────────────────────────────────── */
+
+  /* Vertical scroll wrapper — this is what clips height and scrolls vertically */
+  .positions-outer {
+    max-height: 440px;
+    overflow-y: auto;
+    overflow-x: hidden; /* horizontal handled by inner wrapper */
+    -webkit-overflow-scrolling: touch;
+    width: 100%;
+  }
+
+  /* Horizontal scroll wrapper — lives inside the vertical scroller */
+  .positions-inner {
+    overflow-x: auto;
+    overflow-y: visible; /* let vertical scroll happen in outer */
+    -webkit-overflow-scrolling: touch;
+    width: 100%;
+    /* Ensures iOS actually renders the scrollbar area */
+    padding-bottom: 6px;
+  }
+
+  /* Nudge hint on mobile so users know it scrolls sideways */
+  .scroll-hint {
+    display: none;
+    font-size: 10px;
+    color: var(--muted);
+    padding: 6px 12px 2px;
+    text-align: right;
+    letter-spacing: 0.3px;
+  }
+
   .pos-table { 
     width: 100%; 
-    border-collapse: separate; /* Changed to separate for sticky headers to work cleanly */
+    border-collapse: separate;
     border-spacing: 0;
-    min-width: 700px; 
+    /* Hard minimum so the table never squashes — forces horizontal scroll */
+    min-width: 720px;
   }
   
-  /* STICKY TABLE HEADER: Keeps titles at the top while data rows scroll */
+  /* Sticky thead — sticks to the top of .positions-outer (the vertical scroller) */
+  .pos-table thead { position: sticky; top: 0; z-index: 5; }
+
   .pos-table th {
-    position: sticky;
-    top: 0;
-    z-index: 5;
     font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase;
     color: var(--muted); padding: 10px 12px; text-align: left;
     background: var(--surface2); 
     white-space: nowrap;
-    box-shadow: inset 0 -1px 0 var(--border); /* Replaces border-bottom for sticky elements */
+    /* Border replacement that works with sticky */
+    box-shadow: inset 0 -1px 0 var(--border);
   }
   
-  .pos-table td { padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  .pos-table td { padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
   .pos-table tr:hover td { background: rgba(255,255,255,0.02); }
 
   .progress-bar { flex: 1; height: 4px; background: var(--border); border-radius: 99px; overflow: hidden; min-width: 60px; }
@@ -228,7 +266,7 @@
   .side-YES { background: rgba(0,229,160,0.12); color: var(--green); border: 1px solid rgba(0,229,160,0.25); }
   .side-NO  { background: rgba(255,69,96,0.12);  color: var(--red);   border: 1px solid rgba(255,69,96,0.25); }
 
-  .q-text { max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .q-text { max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
 
   .stale-warn { color: var(--yellow); font-size: 10px; }
   .hold-warn  { color: var(--yellow); }
@@ -242,6 +280,7 @@
   .log-box {
     height: 280px; overflow-y: auto; padding: 10px;
     font-size: 10px; line-height: 1.9; color: var(--muted);
+    -webkit-overflow-scrolling: touch;
   }
   .log-box::-webkit-scrollbar { width: 3px; }
   .log-box::-webkit-scrollbar-track { background: transparent; }
@@ -267,6 +306,16 @@
   .trade-pnl { font-weight: 700; font-family: var(--sans); font-size: 14px; white-space: nowrap; }
   .trade-meta { font-size: 10px; color: var(--muted); white-space: nowrap; }
 
+  /* ── Closed trades scroll ── */
+  .panel-scroll {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    max-height: 440px;
+  }
+  .panel-scroll::-webkit-scrollbar { width: 4px; display: block; }
+  .panel-scroll::-webkit-scrollbar-track { background: rgba(255,255,255,0.02); border-radius: 99px; }
+  .panel-scroll::-webkit-scrollbar-thumb { background: #3b9eff; border-radius: 99px; }
+
   /* ── Config panel ── */
   .config-body { padding: 14px 16px; line-height: 2.2; font-size: 11px; }
   .config-body > div { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -277,30 +326,14 @@
 
   .empty { padding: 32px 16px; text-align: center; color: var(--muted); font-size: 12px; line-height: 1.6; }
 
-  /* Desktop & General Scroll Settings */
-  .panel-scroll { overflow-y: auto; overflow-x: auto; -webkit-overflow-scrolling: touch; max-height: 440px; }
-  
-  .panel-scroll::-webkit-scrollbar { width: 4px; height: 6px; display: block; }
-  .panel-scroll::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.02); border-radius: 99px; }
-  .panel-scroll::-webkit-scrollbar-thumb { background: #3b9eff; border-radius: 99px; }
-
-  .table-scroll { 
-    overflow-x: auto; 
-    -webkit-overflow-scrolling: touch; 
-    width: 100%; 
-    padding-bottom: 8px;
-  }
-
   /* ── RESPONSIVE BREAKPOINTS ── */
 
-  /* Tablet & Smaller Desktop */
   @media (max-width: 1024px) {
     .main-grid { grid-template-columns: 1fr; }
     .bottom-grid { grid-template-columns: 1fr; }
     .log-box { height: 240px; }
   }
 
-  /* Core Mobile Screen */
   @media (max-width: 600px) {
     .wrapper { padding: 10px 8px; }
     header { margin-bottom: 12px; gap: 8px; }
@@ -313,8 +346,20 @@
     .main-grid { gap: 10px; margin-bottom: 10px; }
     .bottom-grid { gap: 10px; }
 
-    /* For mobile, ensure the panel has a max height so the sticky header stays inside the panel view */
-    .panel-scroll { max-height: 350px !important; overflow-y: auto; overflow-x: auto; }
+    /* Show the swipe hint on mobile */
+    .scroll-hint { display: block; }
+
+    /* Tighten vertical height on mobile */
+    .positions-outer { max-height: 340px; }
+
+    /* On mobile the inner horizontal scroller must use scroll (not auto)
+       for reliable touch-scroll on iOS Safari */
+    .positions-inner {
+      overflow-x: scroll;
+      /* Render a subtle scrollbar track so users know to swipe */
+      -webkit-overflow-scrolling: touch;
+    }
+
     .log-box { height: 200px; font-size: 9.5px; }
 
     .trade-row { padding: 10px 12px; flex-direction: column; align-items: flex-start; gap: 6px; }
@@ -327,14 +372,24 @@
 
     .panel-header { padding: 10px 12px; }
     .panel-title { font-size: 12px; }
+    .panel-scroll { max-height: 350px; }
   }
 
-  /* Ultra-Small Screens */
   @media (max-width: 380px) {
     header { flex-direction: column; align-items: flex-start; gap: 10px; }
     .header-right { width: 100%; justify-content: flex-start; }
     .stats-grid { grid-template-columns: 1fr; }
   }
+
+  /* Scrollbar styling for the inner horizontal scroller */
+  .positions-inner::-webkit-scrollbar { height: 4px; display: block; }
+  .positions-inner::-webkit-scrollbar-track { background: rgba(255,255,255,0.03); border-radius: 99px; }
+  .positions-inner::-webkit-scrollbar-thumb { background: var(--blue); border-radius: 99px; }
+
+  /* Vertical scrollbar for outer */
+  .positions-outer::-webkit-scrollbar { width: 4px; display: block; }
+  .positions-outer::-webkit-scrollbar-track { background: rgba(255,255,255,0.02); border-radius: 99px; }
+  .positions-outer::-webkit-scrollbar-thumb { background: var(--green-dim); border-radius: 99px; }
 </style>
 </head>
 <body>
@@ -417,9 +472,16 @@
         <span class="panel-badge" id="open-count-badge">0 active</span>
       </div>
 
-      <!-- Scrollable table wrapper -->
-      <div class="panel-scroll table-scroll" id="positions-table-wrap">
-        <div class="empty">No open positions yet.<br>Bot is scanning markets…</div>
+      <!--
+        TWO-LAYER SCROLL:
+        .positions-outer  → vertical scroll + sticky thead anchor
+        .positions-inner  → horizontal scroll (swipe left/right on mobile)
+      -->
+      <div class="scroll-hint">← swipe to see all columns →</div>
+      <div class="positions-outer" id="positions-table-wrap">
+        <div class="positions-inner" id="positions-inner-wrap">
+          <div class="empty">No open positions yet.<br>Bot is scanning markets…</div>
+        </div>
       </div>
     </div>
 
@@ -627,9 +689,10 @@ function render(data) {
   }
 
   // ── Open Positions Table ──
-  const tableWrap = el('positions-table-wrap');
+  // We target the INNER wrapper now for the actual table content.
+  const innerWrap = el('positions-inner-wrap');
   if (openPos.length === 0) {
-    tableWrap.innerHTML = '<div class="empty">No open positions yet.<br>Bot is scanning markets…</div>';
+    innerWrap.innerHTML = '<div class="empty">No open positions yet.<br>Bot is scanning markets…</div>';
   } else {
     const rows = openPos.map(p => {
       const pnl        = +(p.pnl) || 0;
@@ -640,7 +703,7 @@ function render(data) {
       const fetchedStr = p.market_fetched_at ? new Date(p.market_fetched_at).toLocaleTimeString() : '—';
       return `<tr>
         <td><span class="side-badge side-${p.side}">${p.side}</span></td>
-        <td><div class="q-text" title="${p.question}">${p.question}</div></td>
+        <td><span class="q-text" title="${p.question}">${p.question}</span></td>
         <td>${srcPill(p.source)}</td>
         <td style="font-family:var(--mono)">${(+(p.entry_price)||0).toFixed(3)}</td>
         <td style="font-family:var(--mono);color:${priceColor}">${(+(p.current_price||p.entry_price)||0).toFixed(3)}</td>
@@ -648,13 +711,15 @@ function render(data) {
         <td>${holdDaysStr(p.timestamp)}</td>
         <td>${stalePriceStr(p.last_price_update)}</td>
         <td>
-          <div class="progress-bar"><div class="progress-fill" style="width:${confPct}%;background:${priceColor}"></div></div>
-          <div style="font-size:10px;color:var(--muted);margin-top:2px">${confPct}% / ${edgePct}% edge</div>
+          <div style="min-width:80px">
+            <div class="progress-bar"><div class="progress-fill" style="width:${confPct}%;background:${priceColor}"></div></div>
+            <div style="font-size:10px;color:var(--muted);margin-top:2px">${confPct}% / ${edgePct}% edge</div>
+          </div>
         </td>
         <td style="font-size:10px;color:var(--muted)">${fetchedStr}</td>
       </tr>`;
     }).join('');
-    tableWrap.innerHTML = `<table class="pos-table">
+    innerWrap.innerHTML = `<table class="pos-table">
       <thead><tr>
         <th>Side</th><th>Market</th><th>Sig</th>
         <th>Entry</th><th>Now</th><th>P&L</th>
