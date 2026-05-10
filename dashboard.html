@@ -185,6 +185,7 @@
     background: var(--surface2);
     gap: 8px;
     flex-wrap: wrap;
+    z-index: 10; /* Keep header above scrolling content */
   }
   .panel-title { font-family: var(--sans); font-weight: 700; font-size: 13px; color: #fff; white-space: nowrap; }
   .panel-badge { font-size: 10px; padding: 3px 8px; border-radius: 99px; background: var(--border); color: var(--muted); white-space: nowrap; flex-shrink: 0; }
@@ -200,15 +201,23 @@
   
   .pos-table { 
     width: 100%; 
-    border-collapse: collapse; 
-    min-width: 700px; /* Forces horizontal scroll on mobile */
+    border-collapse: separate; /* Changed to separate for sticky headers to work cleanly */
+    border-spacing: 0;
+    min-width: 700px; 
   }
+  
+  /* STICKY TABLE HEADER: Keeps titles at the top while data rows scroll */
   .pos-table th {
+    position: sticky;
+    top: 0;
+    z-index: 5;
     font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase;
     color: var(--muted); padding: 10px 12px; text-align: left;
-    background: var(--surface2); border-bottom: 1px solid var(--border);
+    background: var(--surface2); 
     white-space: nowrap;
+    box-shadow: inset 0 -1px 0 var(--border); /* Replaces border-bottom for sticky elements */
   }
+  
   .pos-table td { padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
   .pos-table tr:hover td { background: rgba(255,255,255,0.02); }
 
@@ -304,8 +313,8 @@
     .main-grid { gap: 10px; margin-bottom: 10px; }
     .bottom-grid { gap: 10px; }
 
-    /* Expand panels to allow page scroll, but ensure x-axis scrolling is active for tables */
-    .panel-scroll { max-height: none !important; overflow-y: visible; overflow-x: auto; }
+    /* For mobile, ensure the panel has a max height so the sticky header stays inside the panel view */
+    .panel-scroll { max-height: 350px !important; overflow-y: auto; overflow-x: auto; }
     .log-box { height: 200px; font-size: 9.5px; }
 
     .trade-row { padding: 10px 12px; flex-direction: column; align-items: flex-start; gap: 6px; }
@@ -617,7 +626,7 @@ function render(data) {
     lastBalance = data.balance;
   }
 
-  // ── Open Positions Table (Now for both Mobile and Desktop) ──
+  // ── Open Positions Table ──
   const tableWrap = el('positions-table-wrap');
   if (openPos.length === 0) {
     tableWrap.innerHTML = '<div class="empty">No open positions yet.<br>Bot is scanning markets…</div>';
