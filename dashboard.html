@@ -24,7 +24,6 @@
   }
 
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
   html { overflow-x: hidden; }
 
   body {
@@ -39,87 +38,60 @@
 
   body::before {
     content: '';
-    position: fixed;
-    inset: 0;
+    position: fixed; inset: 0;
     background-image:
       linear-gradient(rgba(0,229,160,0.025) 1px, transparent 1px),
       linear-gradient(90deg, rgba(0,229,160,0.025) 1px, transparent 1px);
     background-size: 40px 40px;
-    pointer-events: none;
-    z-index: 0;
+    pointer-events: none; z-index: 0;
   }
 
   .wrapper {
-    position: relative;
-    z-index: 1;
-    max-width: 1400px;
-    margin: 0 auto;
-    padding: 16px 12px;
-    width: 100%;
+    position: relative; z-index: 1;
+    max-width: 1400px; margin: 0 auto;
+    padding: 16px 12px; width: 100%;
   }
 
   /* ── Header ── */
   header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 16px;
-    padding-bottom: 14px;
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 16px; padding-bottom: 14px;
     border-bottom: 1px solid var(--border);
-    gap: 12px;
-    flex-wrap: wrap;
+    gap: 12px; flex-wrap: wrap;
   }
   .brand { display: flex; align-items: center; gap: 12px; }
   .brand-icon {
     width: 36px; height: 36px;
     background: linear-gradient(135deg, var(--green), #009966);
-    border-radius: 8px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 18px;
-    flex-shrink: 0;
+    border-radius: 8px; display: flex; align-items: center;
+    justify-content: center; font-size: 18px; flex-shrink: 0;
   }
   .brand-text { font-family: var(--sans); }
   .brand-name { font-size: 16px; font-weight: 800; color: #fff; letter-spacing: -0.5px; }
   .brand-sub  { font-size: 10px; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; }
-
   .header-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-
   .status-pill {
     display: flex; align-items: center; gap: 7px;
     padding: 5px 12px; border-radius: 99px;
     border: 1px solid var(--green-dim);
     font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
-    color: var(--green);
-    white-space: nowrap;
+    color: var(--green); white-space: nowrap;
   }
-  .status-pill.halted {
-    border-color: var(--red);
-    color: var(--red);
-    background: rgba(255,69,96,0.08);
-  }
+  .status-pill.halted { border-color: var(--red); color: var(--red); background: rgba(255,69,96,0.08); }
   .pulse {
     width: 6px; height: 6px; border-radius: 50%;
-    background: currentColor;
-    animation: pulse 2s infinite;
-    flex-shrink: 0;
+    background: currentColor; animation: pulse 2s infinite; flex-shrink: 0;
   }
   @keyframes pulse {
-    0%,100% { opacity: 1; transform: scale(1); }
-    50%      { opacity: 0.4; transform: scale(0.7); }
+    0%,100% { opacity:1; transform:scale(1); }
+    50%      { opacity:0.4; transform:scale(0.7); }
   }
 
   /* ── Circuit Breaker Banner ── */
   .cb-banner {
-    background: rgba(255,69,96,0.08);
-    border: 1px solid rgba(255,69,96,0.35);
-    border-radius: 10px;
-    padding: 12px 14px;
-    margin-bottom: 14px;
-    font-size: 12px;
-    color: #fca5a5;
-    display: none;
-    line-height: 1.5;
-    word-break: break-word;
+    background: rgba(255,69,96,0.08); border: 1px solid rgba(255,69,96,0.35);
+    border-radius: 10px; padding: 12px 14px; margin-bottom: 14px;
+    font-size: 12px; color: #fca5a5; display: none; line-height: 1.5; word-break: break-word;
   }
   .cb-banner.visible { display: block; }
 
@@ -127,156 +99,120 @@
   .stats-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 10px;
-    margin-bottom: 16px;
+    gap: 10px; margin-bottom: 16px;
   }
   .stat-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 14px 16px;
-    position: relative;
-    overflow: hidden;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px 16px;
+    position: relative; overflow: hidden;
+    min-width: 0; display: flex; flex-direction: column; justify-content: center;
   }
   .stat-card::after {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 2px;
-    background: var(--accent, var(--green));
+    content: ''; position: absolute; top: 0; left: 0; right: 0;
+    height: 2px; background: var(--accent, var(--green));
   }
   .stat-label { font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
-  .stat-value { font-family: var(--sans); font-size: clamp(18px, 4vw, 22px); font-weight: 800; color: #fff; line-height: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .stat-value { font-family: var(--sans); font-size: clamp(18px,4vw,22px); font-weight: 800; color: #fff; line-height: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .stat-sub   { font-size: 10px; color: var(--muted); margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pos { color: var(--green) !important; }
   .neg { color: var(--red) !important; }
 
-  /* ── Main Layout Grids ── */
-  .main-grid {
-    display: grid;
-    grid-template-columns: 1fr 340px;
-    gap: 14px;
-    margin-bottom: 14px;
-  }
-  .bottom-grid {
-    display: grid; 
-    grid-template-columns: 1fr 1fr; 
-    gap: 14px; 
-  }
+  /* ── Layout Grids ── */
+  .main-grid   { display: grid; grid-template-columns: 1fr 340px; gap: 14px; margin-bottom: 14px; }
+  .bottom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 
-  /* ── Panel ── */
+  /* ── Panel ──
+     overflow: clip keeps border-radius visual clipping without
+     creating a scroll-blocking stacking context that would eat
+     touch events from child scroll containers on iOS Safari. ── */
   .panel {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 12px;
-    overflow: hidden;
+    overflow: clip;          /* visual clip only — does NOT block child scroll */
     min-width: 0;
     display: flex;
     flex-direction: column;
   }
   .panel-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 12px 16px;
-    border-bottom: 1px solid var(--border);
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
     background: var(--surface2);
-    gap: 8px;
-    flex-wrap: wrap;
-    /* Must NOT be sticky itself — it's a flex child of .panel */
-    flex-shrink: 0; /* Prevent header from shrinking when panel has max-height */
+    gap: 8px; flex-wrap: wrap;
+    flex-shrink: 0;
   }
   .panel-title { font-family: var(--sans); font-weight: 700; font-size: 13px; color: #fff; white-space: nowrap; }
   .panel-badge { font-size: 10px; padding: 3px 8px; border-radius: 99px; background: var(--border); color: var(--muted); white-space: nowrap; flex-shrink: 0; }
 
   /* ── Equity Chart ── */
-  .equity-chart-wrapper {
-    position: relative;
-    width: 100%;
-    height: 120px;
-    padding: 10px;
-  }
+  .equity-chart-wrapper { position: relative; width: 100%; height: 120px; padding: 10px; }
   canvas { width: 100% !important; height: 100% !important; }
 
-  /* ─────────────────────────────────────────────────────────────
-     POSITIONS TABLE — TWO-LAYER SCROLL ARCHITECTURE
-     Layer 1 (.positions-outer): vertical scroll, fixed max-height
-     Layer 2 (.positions-inner): horizontal scroll for the table
-     The sticky <thead> sticks inside Layer 1.
-  ───────────────────────────────────────────────────────────── */
-
-  /* Vertical scroll wrapper — this is what clips height and scrolls vertically */
-  .positions-outer {
-    max-height: 440px;
+  /* ══════════════════════════════════════════════════════════════
+     POSITIONS TABLE SCROLL
+     Single container handles BOTH axes.
+     overflow-x: scroll   → forces iOS to register the touch handler
+     overflow-y: auto     → vertical scroll when rows exceed max-height
+     -webkit-overflow-scrolling: touch → momentum / inertia on iPhone
+     Sticky thead anchors to THIS element (its direct scroll parent).
+  ══════════════════════════════════════════════════════════════ */
+  .pos-scroll {
+    overflow-x: scroll;
     overflow-y: auto;
-    overflow-x: hidden; /* horizontal handled by inner wrapper */
     -webkit-overflow-scrolling: touch;
+    max-height: 440px;
     width: 100%;
   }
+  .pos-scroll::-webkit-scrollbar         { width: 4px; height: 5px; }
+  .pos-scroll::-webkit-scrollbar-track   { background: rgba(255,255,255,0.03); }
+  .pos-scroll::-webkit-scrollbar-thumb   { background: var(--blue); border-radius: 99px; }
 
-  /* Horizontal scroll wrapper — lives inside the vertical scroller */
-  .positions-inner {
-    overflow-x: auto;
-    overflow-y: visible; /* let vertical scroll happen in outer */
-    -webkit-overflow-scrolling: touch;
-    width: 100%;
-    /* Ensures iOS actually renders the scrollbar area */
-    padding-bottom: 6px;
-  }
-
-  /* Nudge hint on mobile so users know it scrolls sideways */
-  .scroll-hint {
+  /* Swipe hint — only shown on mobile */
+  .swipe-hint {
     display: none;
-    font-size: 10px;
-    color: var(--muted);
-    padding: 6px 12px 2px;
-    text-align: right;
-    letter-spacing: 0.3px;
+    font-size: 10px; color: var(--muted);
+    padding: 5px 14px 2px; text-align: right;
+    flex-shrink: 0; letter-spacing: 0.3px;
   }
 
-  .pos-table { 
-    width: 100%; 
-    border-collapse: separate;
-    border-spacing: 0;
-    /* Hard minimum so the table never squashes — forces horizontal scroll */
-    min-width: 720px;
+  .pos-table {
+    border-collapse: separate; border-spacing: 0;
+    min-width: 780px;   /* wider than any phone → forces horizontal overflow */
+    width: 100%;
   }
-  
-  /* Sticky thead — sticks to the top of .positions-outer (the vertical scroller) */
+  /* thead sticks to the top of .pos-scroll */
   .pos-table thead { position: sticky; top: 0; z-index: 5; }
-
   .pos-table th {
     font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase;
     color: var(--muted); padding: 10px 12px; text-align: left;
-    background: var(--surface2); 
-    white-space: nowrap;
-    /* Border replacement that works with sticky */
+    background: var(--surface2); white-space: nowrap;
     box-shadow: inset 0 -1px 0 var(--border);
   }
-  
-  .pos-table td { padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
+  .pos-table td {
+    padding: 9px 12px; border-bottom: 1px solid var(--border);
+    vertical-align: middle; white-space: nowrap;
+  }
+  .pos-table tr:last-child td { border-bottom: none; }
   .pos-table tr:hover td { background: rgba(255,255,255,0.02); }
 
-  .progress-bar { flex: 1; height: 4px; background: var(--border); border-radius: 99px; overflow: hidden; min-width: 60px; }
+  .progress-bar  { height: 4px; background: var(--border); border-radius: 99px; overflow: hidden; min-width: 70px; }
   .progress-fill { height: 100%; border-radius: 99px; }
 
-  .side-badge { display: inline-flex; align-items: center; justify-content: center; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.5px; flex-shrink: 0; }
+  .side-badge { display: inline-flex; align-items: center; justify-content: center; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.5px; }
   .side-YES { background: rgba(0,229,160,0.12); color: var(--green); border: 1px solid rgba(0,229,160,0.25); }
   .side-NO  { background: rgba(255,69,96,0.12);  color: var(--red);   border: 1px solid rgba(255,69,96,0.25); }
-
-  .q-text { max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+  .q-text   { max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
 
   .stale-warn { color: var(--yellow); font-size: 10px; }
   .hold-warn  { color: var(--yellow); }
+
   .reason-tag { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: var(--border); color: var(--muted); white-space: nowrap; }
   .reason-tag.timeout { background: rgba(249,115,22,0.15); color: var(--orange); }
-  .reason-tag.stop    { background: rgba(255,69,96,0.12); color: var(--red); }
-  .reason-tag.profit  { background: rgba(0,229,160,0.12); color: var(--green); }
+  .reason-tag.stop    { background: rgba(255,69,96,0.12);  color: var(--red); }
+  .reason-tag.profit  { background: rgba(0,229,160,0.12);  color: var(--green); }
   .reason-tag.trail   { background: rgba(59,130,246,0.12); color: var(--blue); }
 
-  /* ── Log panel ── */
+  /* ── Log ── */
   .log-box {
     height: 280px; overflow-y: auto; padding: 10px;
     font-size: 10px; line-height: 1.9; color: var(--muted);
@@ -286,39 +222,62 @@
   .log-box::-webkit-scrollbar-track { background: transparent; }
   .log-box::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
   .log-line { padding: 2px 0; border-bottom: 1px solid rgba(255,255,255,0.02); word-break: break-all; }
-  .log-line.open     { color: var(--green); }
-  .log-line.close    { color: var(--blue); }
-  .log-line.skip     { color: var(--muted); }
-  .log-line.error    { color: var(--red); }
-  .log-line.stale    { color: var(--yellow); }
-  .log-line.timeout  { color: var(--orange); }
-  .log-line.circuit  { color: var(--red); font-weight: bold; }
+  .log-line.open    { color: var(--green); }
+  .log-line.close   { color: var(--blue); }
+  .log-line.skip    { color: var(--muted); }
+  .log-line.error   { color: var(--red); }
+  .log-line.stale   { color: var(--yellow); }
+  .log-line.timeout { color: var(--orange); }
+  .log-line.circuit { color: var(--red); font-weight: bold; }
 
-  /* ── Trade row ── */
-  .trade-row {
-    display: flex; align-items: flex-start; flex-wrap: wrap;
-    padding: 12px 16px; border-bottom: 1px solid var(--border);
-    font-size: 12px; gap: 8px;
-  }
-  .trade-row:last-child { border-bottom: none; }
-  .trade-q { width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); font-size: 11px; }
-  .trade-row-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; flex: 1; }
-  .trade-pnl { font-weight: 700; font-family: var(--sans); font-size: 14px; white-space: nowrap; }
-  .trade-meta { font-size: 10px; color: var(--muted); white-space: nowrap; }
-
-  /* ── Closed trades scroll ── */
-  .panel-scroll {
+  /* ══════════════════════════════════════════════════════════════
+     CLOSED TRADES
+     Uses a grid layout so P&L is always anchored to the right
+     of each row, never pushed off-screen.
+  ══════════════════════════════════════════════════════════════ */
+  .closed-scroll {
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
     max-height: 440px;
   }
-  .panel-scroll::-webkit-scrollbar { width: 4px; display: block; }
-  .panel-scroll::-webkit-scrollbar-track { background: rgba(255,255,255,0.02); border-radius: 99px; }
-  .panel-scroll::-webkit-scrollbar-thumb { background: #3b9eff; border-radius: 99px; }
+  .closed-scroll::-webkit-scrollbar { width: 4px; }
+  .closed-scroll::-webkit-scrollbar-track { background: rgba(255,255,255,0.02); }
+  .closed-scroll::-webkit-scrollbar-thumb { background: var(--blue); border-radius: 99px; }
 
-  /* ── Config panel ── */
-  .config-body { padding: 14px 16px; line-height: 2.2; font-size: 11px; }
-  .config-body > div { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .trade-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-rows: auto auto;
+    column-gap: 10px; row-gap: 4px;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+  }
+  .trade-row:last-child { border-bottom: none; }
+
+  /* Question text — left column, top row */
+  .trade-q {
+    grid-column: 1; grid-row: 1;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    color: var(--text); font-size: 11px;
+  }
+  /* P&L — right column, spans both rows → always visible */
+  .trade-pnl {
+    grid-column: 2; grid-row: 1 / 3;
+    font-weight: 700; font-family: var(--sans); font-size: 15px;
+    white-space: nowrap; align-self: center; text-align: right;
+  }
+  /* Badges row — left column, bottom row */
+  .trade-row-meta {
+    grid-column: 1; grid-row: 2;
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  }
+  .trade-meta { font-size: 10px; color: var(--muted); white-space: nowrap; }
+
+  /* ── Config ── */
+  .config-scroll { overflow-y: auto; -webkit-overflow-scrolling: touch; max-height: 440px; }
+  .config-body   { padding: 14px 16px; line-height: 2.2; font-size: 11px; }
+  .config-body > div { min-width: 0; }
 
   /* ── Footer ── */
   .refresh-info { text-align: center; font-size: 10px; color: var(--muted); padding: 14px; letter-spacing: 0.5px; }
@@ -326,76 +285,40 @@
 
   .empty { padding: 32px 16px; text-align: center; color: var(--muted); font-size: 12px; line-height: 1.6; }
 
-  /* ── RESPONSIVE BREAKPOINTS ── */
-
+  /* ── RESPONSIVE ── */
   @media (max-width: 1024px) {
-    .main-grid { grid-template-columns: 1fr; }
+    .main-grid   { grid-template-columns: 1fr; }
     .bottom-grid { grid-template-columns: 1fr; }
     .log-box { height: 240px; }
   }
 
   @media (max-width: 600px) {
-    .wrapper { padding: 10px 8px; }
-    header { margin-bottom: 12px; gap: 8px; }
+    .wrapper    { padding: 10px 8px; }
     .brand-name { font-size: 15px; }
-    
     .stats-grid { gap: 8px; grid-template-columns: repeat(2, 1fr); }
-    .stat-card { padding: 10px 12px; border-radius: 10px; }
+    .stat-card  { padding: 10px 12px; border-radius: 10px; }
     .stat-value { font-size: 18px; }
-
-    .main-grid { gap: 10px; margin-bottom: 10px; }
+    .main-grid   { gap: 10px; margin-bottom: 10px; }
     .bottom-grid { gap: 10px; }
-
-    /* Show the swipe hint on mobile */
-    .scroll-hint { display: block; }
-
-    /* Tighten vertical height on mobile */
-    .positions-outer { max-height: 340px; }
-
-    /* On mobile the inner horizontal scroller must use scroll (not auto)
-       for reliable touch-scroll on iOS Safari */
-    .positions-inner {
-      overflow-x: scroll;
-      /* Render a subtle scrollbar track so users know to swipe */
-      -webkit-overflow-scrolling: touch;
-    }
-
+    .swipe-hint  { display: block; }
+    .pos-scroll  { max-height: 320px; }
+    .closed-scroll { max-height: 320px; }
     .log-box { height: 200px; font-size: 9.5px; }
-
-    .trade-row { padding: 10px 12px; flex-direction: column; align-items: flex-start; gap: 6px; }
-    .trade-q { white-space: normal; line-height: 1.4; font-size: 11.5px; }
-    .trade-row-meta { width: 100%; flex-wrap: wrap; }
-    .trade-pnl { align-self: flex-start; margin-top: 2px; }
-
-    .config-body { padding: 12px; font-size: 10px; line-height: 2.1; }
-    .config-body > div { white-space: normal; overflow: visible; text-overflow: unset; }
-
     .panel-header { padding: 10px 12px; }
-    .panel-title { font-size: 12px; }
-    .panel-scroll { max-height: 350px; }
+    .panel-title  { font-size: 12px; }
+    .config-body  { padding: 12px; font-size: 10px; line-height: 2.1; }
   }
 
   @media (max-width: 380px) {
-    header { flex-direction: column; align-items: flex-start; gap: 10px; }
+    header        { flex-direction: column; align-items: flex-start; gap: 10px; }
     .header-right { width: 100%; justify-content: flex-start; }
-    .stats-grid { grid-template-columns: 1fr; }
+    .stats-grid   { grid-template-columns: 1fr; }
   }
-
-  /* Scrollbar styling for the inner horizontal scroller */
-  .positions-inner::-webkit-scrollbar { height: 4px; display: block; }
-  .positions-inner::-webkit-scrollbar-track { background: rgba(255,255,255,0.03); border-radius: 99px; }
-  .positions-inner::-webkit-scrollbar-thumb { background: var(--blue); border-radius: 99px; }
-
-  /* Vertical scrollbar for outer */
-  .positions-outer::-webkit-scrollbar { width: 4px; display: block; }
-  .positions-outer::-webkit-scrollbar-track { background: rgba(255,255,255,0.02); border-radius: 99px; }
-  .positions-outer::-webkit-scrollbar-thumb { background: var(--green-dim); border-radius: 99px; }
 </style>
 </head>
 <body>
 <div class="wrapper">
 
-  <!-- Header -->
   <header>
     <div class="brand">
       <div class="brand-icon">🤖</div>
@@ -412,12 +335,10 @@
     </div>
   </header>
 
-  <!-- Circuit Breaker Banner -->
   <div class="cb-banner" id="cb-banner">
     ⛔ <strong>CIRCUIT BREAKER ACTIVE</strong> — Balance fell below 75% floor. New position scanning is paused. Existing positions are still managed (TP / SL / Timeout still fire normally).
   </div>
 
-  <!-- Stats -->
   <div class="stats-grid">
     <div class="stat-card" style="--accent:var(--green)">
       <div class="stat-label">Paper Balance</div>
@@ -451,7 +372,6 @@
     </div>
   </div>
 
-  <!-- Equity Curve -->
   <div class="panel" style="margin-bottom:14px">
     <div class="panel-header">
       <span class="panel-title">Equity Curve</span>
@@ -462,7 +382,6 @@
     </div>
   </div>
 
-  <!-- Main Grid -->
   <div class="main-grid">
 
     <!-- Open Positions -->
@@ -471,17 +390,14 @@
         <span class="panel-title">Open Positions</span>
         <span class="panel-badge" id="open-count-badge">0 active</span>
       </div>
-
+      <div class="swipe-hint">← swipe left/right to see all columns →</div>
       <!--
-        TWO-LAYER SCROLL:
-        .positions-outer  → vertical scroll + sticky thead anchor
-        .positions-inner  → horizontal scroll (swipe left/right on mobile)
+        Single container: overflow-x:scroll + overflow-y:auto
+        This is the scroll parent for sticky thead.
+        Works reliably on iPhone 11 / iOS 13+.
       -->
-      <div class="scroll-hint">← swipe to see all columns →</div>
-      <div class="positions-outer" id="positions-table-wrap">
-        <div class="positions-inner" id="positions-inner-wrap">
-          <div class="empty">No open positions yet.<br>Bot is scanning markets…</div>
-        </div>
+      <div class="pos-scroll" id="positions-wrap">
+        <div class="empty">No open positions yet.<br>Bot is scanning markets…</div>
       </div>
     </div>
 
@@ -498,7 +414,6 @@
 
   </div>
 
-  <!-- Bottom Grid -->
   <div class="bottom-grid">
 
     <!-- Closed Trades -->
@@ -507,29 +422,31 @@
         <span class="panel-title">Closed Trades</span>
         <span class="panel-badge" id="closed-count-badge">0</span>
       </div>
-      <div class="panel-scroll" id="closed-body">
+      <div class="closed-scroll" id="closed-body">
         <div class="empty">No closed trades yet.</div>
       </div>
     </div>
 
-    <!-- Config panel -->
+    <!-- Config -->
     <div class="panel">
       <div class="panel-header">
         <span class="panel-title">Strategy Config — v4.1</span>
       </div>
-      <div class="panel-scroll config-body">
-        <div><span style="color:var(--muted)">Model ·</span> meta-llama-3-70b</div>
-        <div><span style="color:var(--muted)">Strategy ·</span> Buy-Low / Sell-High</div>
-        <div><span style="color:var(--muted)">Entry zone ·</span> <span style="color:var(--yellow)">$0.12 – $0.45</span></div>
-        <div><span style="color:var(--muted)">Take profit ·</span> <span style="color:var(--green)">≥$0.65 or +$0.18 ✅</span></div>
-        <div><span style="color:var(--muted)">Stop loss ·</span> <span style="color:var(--red)">–40% of entry</span></div>
-        <div><span style="color:var(--muted)">Force exit ·</span> <span style="color:var(--orange)">after 4 days ✅</span></div>
-        <div><span style="color:var(--muted)">Trailing stop ·</span> <span style="color:var(--blue)">+30% rise, floor +10% ✅</span></div>
-        <div><span style="color:var(--muted)">Circuit breaker ·</span> <span style="color:var(--red)">halt at –25% ✅</span></div>
-        <div><span style="color:var(--muted)">Price refresh ·</span> <span style="color:var(--green)">WS→CLOB→Batch ✅</span></div>
-        <div><span style="color:var(--muted)">LLM retry ·</span> <span style="color:var(--blue)">exp. backoff ✅</span></div>
-        <div style="margin-top:12px; padding:10px 12px; background:rgba(255,69,96,0.07); border:1px solid rgba(255,69,96,0.2); border-radius:8px; font-size:10px; color:var(--red); line-height:1.5;">
-          ⚠️ Paper trading only. No real funds at risk.
+      <div class="config-scroll">
+        <div class="config-body">
+          <div><span style="color:var(--muted)">Model ·</span> meta-llama-3-70b</div>
+          <div><span style="color:var(--muted)">Strategy ·</span> Buy-Low / Sell-High</div>
+          <div><span style="color:var(--muted)">Entry zone ·</span> <span style="color:var(--yellow)">$0.12 – $0.45</span></div>
+          <div><span style="color:var(--muted)">Take profit ·</span> <span style="color:var(--green)">≥$0.65 or +$0.18 ✅</span></div>
+          <div><span style="color:var(--muted)">Stop loss ·</span> <span style="color:var(--red)">–40% of entry</span></div>
+          <div><span style="color:var(--muted)">Force exit ·</span> <span style="color:var(--orange)">after 4 days ✅</span></div>
+          <div><span style="color:var(--muted)">Trailing stop ·</span> <span style="color:var(--blue)">+30% rise, floor +10% ✅</span></div>
+          <div><span style="color:var(--muted)">Circuit breaker ·</span> <span style="color:var(--red)">halt at –25% ✅</span></div>
+          <div><span style="color:var(--muted)">Price refresh ·</span> <span style="color:var(--green)">WS→CLOB→Batch ✅</span></div>
+          <div><span style="color:var(--muted)">LLM retry ·</span> <span style="color:var(--blue)">exp. backoff ✅</span></div>
+          <div style="margin-top:12px;padding:10px 12px;background:rgba(255,69,96,0.07);border:1px solid rgba(255,69,96,0.2);border-radius:8px;font-size:10px;color:var(--red);line-height:1.5;">
+            ⚠️ Paper trading only. No real funds at risk.
+          </div>
         </div>
       </div>
     </div>
@@ -544,25 +461,17 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script>
-// ── Chart Setup ──────────────────────────────────────────────────────────────
 const ctx = document.getElementById('equityChart').getContext('2d');
 const equityData = { labels: [], datasets: [{
-  label: 'Balance',
-  data: [],
-  borderColor: '#00e5a0',
-  backgroundColor: 'rgba(0,229,160,0.06)',
-  borderWidth: 2,
-  fill: true,
-  tension: 0.4,
-  pointRadius: 2,
-  pointBackgroundColor: '#00e5a0',
+  label: 'Balance', data: [],
+  borderColor: '#00e5a0', backgroundColor: 'rgba(0,229,160,0.06)',
+  borderWidth: 2, fill: true, tension: 0.4,
+  pointRadius: 2, pointBackgroundColor: '#00e5a0',
 }]};
 const chart = new Chart(ctx, {
-  type: 'line',
-  data: equityData,
+  type: 'line', data: equityData,
   options: {
-    responsive: true,
-    maintainAspectRatio: false,
+    responsive: true, maintainAspectRatio: false,
     animation: { duration: 400 },
     plugins: {
       legend: { display: false },
@@ -579,7 +488,6 @@ const chart = new Chart(ctx, {
   }
 });
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
 const fmt  = (n, dec=2) => '$' + Math.abs(+n||0).toFixed(dec);
 const sign = n => (+n||0) >= 0 ? '+' : '-';
 const pc   = n => (+n||0) >= 0 ? 'pos' : 'neg';
@@ -587,62 +495,54 @@ const el   = id => document.getElementById(id);
 
 function uptime(startISO) {
   const diff = Math.floor((Date.now() - new Date(startISO)) / 1000);
-  const h = String(Math.floor(diff / 3600)).padStart(2, '0');
-  const m = String(Math.floor((diff % 3600) / 60)).padStart(2, '0');
-  const s = String(diff % 60).padStart(2, '0');
+  const h = String(Math.floor(diff / 3600)).padStart(2,'0');
+  const m = String(Math.floor((diff % 3600) / 60)).padStart(2,'0');
+  const s = String(diff % 60).padStart(2,'0');
   return `${h}:${m}:${s}`;
 }
-
-function holdDaysStr(timestamp) {
-  if (!timestamp) return '—';
-  const days = (Date.now() - new Date(timestamp)) / 86400000;
+function holdDaysStr(ts) {
+  if (!ts) return '—';
+  const days = (Date.now() - new Date(ts)) / 86400000;
   const warn = days > 3;
-  return `<span class="${warn ? 'hold-warn' : ''}">${days.toFixed(1)}d${warn ? ' ⚠' : ''}</span>`;
+  return `<span class="${warn?'hold-warn':''}">${days.toFixed(1)}d${warn?' ⚠':''}</span>`;
 }
-
-function stalePriceStr(lastUpdate) {
-  if (!lastUpdate) return '<span class="stale-warn">⚠ no data</span>';
-  const msAgo = Date.now() - new Date(lastUpdate);
-  const hrAgo = msAgo / 3600000;
-  if (hrAgo > 2)   return `<span class="stale-warn">⚠ ${hrAgo.toFixed(1)}hr ago</span>`;
-  if (hrAgo > 0.5) return `<span style="color:#566877">${(msAgo/60000).toFixed(0)}m ago</span>`;
-  return `<span style="color:#22c55e">${(msAgo/1000).toFixed(0)}s ago</span>`;
+function stalePriceStr(lu) {
+  if (!lu) return '<span class="stale-warn">⚠ no data</span>';
+  const ms = Date.now() - new Date(lu), hr = ms / 3600000;
+  if (hr > 2)   return `<span class="stale-warn">⚠ ${hr.toFixed(1)}hr ago</span>`;
+  if (hr > 0.5) return `<span style="color:#566877">${(ms/60000).toFixed(0)}m ago</span>`;
+  return `<span style="color:#22c55e">${(ms/1000).toFixed(0)}s ago</span>`;
 }
-
 function reasonTag(reason) {
-  const r = (reason || '').toLowerCase();
+  const r = (reason||'').toLowerCase();
   let cls = 'reason-tag';
-  if (r.includes('timeout'))  cls += ' timeout';
-  else if (r.includes('stop')) cls += ' stop';
-  else if (r.includes('profit')) cls += ' profit';
-  else if (r.includes('trail')) cls += ' trail';
-  return `<span class="${cls}">${reason || '—'}</span>`;
+  if      (r.includes('timeout')) cls += ' timeout';
+  else if (r.includes('stop'))    cls += ' stop';
+  else if (r.includes('profit'))  cls += ' profit';
+  else if (r.includes('trail'))   cls += ' trail';
+  return `<span class="${cls}">${reason||'—'}</span>`;
 }
-
 function srcPill(src) {
-  src = (src || 'ai').toLowerCase();
+  src = (src||'ai').toLowerCase();
   if (src.includes('arb') && src.includes('llm')) return '<span style="font-size:10px;color:#c4b5fd">MULTI</span>';
   if (src.includes('arb'))      return '<span style="font-size:10px;color:#a5b4fc">ARB</span>';
   if (src.includes('momentum')) return '<span style="font-size:10px;color:#7dd3fc">MOM</span>';
   return '<span style="font-size:10px;color:#9ca3af">AI</span>';
 }
 
-let lastBalance = 1000;
-let _startISO   = null;
+let lastBalance = 1000, _startISO = null;
 
-// ── Render ───────────────────────────────────────────────────────────────────
 function render(data) {
-  const realisedPnl   = +(data.total_pnl   || 0);
-  const unrealisedPnl = +(data.unrealised_pnl || 0);
-  const combinedPnl   = +(data.combined_pnl || realisedPnl + unrealisedPnl);
+  const rPnl = +(data.total_pnl      || 0);
+  const uPnl = +(data.unrealised_pnl || 0);
+  const cPnl = +(data.combined_pnl   || rPnl + uPnl);
 
   el('balance').textContent = '$' + (+(data.balance)||0).toFixed(2);
-  el('pnl').textContent     = sign(combinedPnl) + fmt(combinedPnl);
-  el('pnl').className       = 'stat-value ' + pc(combinedPnl);
-  el('pnl-sub').textContent = `R: ${sign(realisedPnl)}${fmt(realisedPnl)} · U: ${sign(unrealisedPnl)}${fmt(unrealisedPnl)}`;
+  el('pnl').textContent     = sign(cPnl) + fmt(cPnl);
+  el('pnl').className       = 'stat-value ' + pc(cPnl);
+  el('pnl-sub').textContent = `R: ${sign(rPnl)}${fmt(rPnl)} · U: ${sign(uPnl)}${fmt(uPnl)}`;
 
-  const live = data.mode === 'LIVE';
-  const cb   = data.circuit_breaker;
+  const cb = data.circuit_breaker, live = data.mode === 'LIVE';
   const pill = el('status-pill');
   if (cb) {
     pill.className = 'status-pill halted';
@@ -653,18 +553,17 @@ function render(data) {
   }
   el('cb-banner').classList.toggle('visible', !!cb);
 
-  const openPos      = data.open_positions  || [];
-  const closedTrades = data.closed_trades   || [];
+  const openPos = data.open_positions || [], closedTrades = data.closed_trades || [];
 
   el('open-pos').textContent           = openPos.length;
   el('closed-pos').textContent         = closedTrades.length + ' closed';
   el('open-count-badge').textContent   = openPos.length + ' active';
   el('closed-count-badge').textContent = closedTrades.length;
   el('signals').textContent            = data.signals_analyzed || 0;
-  el('scans').textContent              = (data.scan_count || 0) + ' scans';
-  el('trades-taken').textContent       = (data.trades_taken || 0) + ' trades';
+  el('scans').textContent              = (data.scan_count||0) + ' scans';
+  el('trades-taken').textContent       = (data.trades_taken||0) + ' trades';
 
-  const wins = closedTrades.filter(t => (t.pnl || 0) > 0).length;
+  const wins = closedTrades.filter(t => (t.pnl||0) > 0).length;
   const wr   = closedTrades.length > 0 ? Math.round(wins / closedTrades.length * 100) + '%' : '—';
   el('winrate').textContent = wr;
   const wrN = parseFloat(wr);
@@ -680,26 +579,22 @@ function render(data) {
     const now = new Date().toLocaleTimeString('en-US', { hour12: false });
     equityData.labels.push(now);
     equityData.datasets[0].data.push(+(data.balance)||0);
-    if (equityData.labels.length > 60) {
-      equityData.labels.shift();
-      equityData.datasets[0].data.shift();
-    }
+    if (equityData.labels.length > 60) { equityData.labels.shift(); equityData.datasets[0].data.shift(); }
     chart.update();
     lastBalance = data.balance;
   }
 
-  // ── Open Positions Table ──
-  // We target the INNER wrapper now for the actual table content.
-  const innerWrap = el('positions-inner-wrap');
+  // ── Open Positions ──
+  const posWrap = el('positions-wrap');
   if (openPos.length === 0) {
-    innerWrap.innerHTML = '<div class="empty">No open positions yet.<br>Bot is scanning markets…</div>';
+    posWrap.innerHTML = '<div class="empty">No open positions yet.<br>Bot is scanning markets…</div>';
   } else {
     const rows = openPos.map(p => {
-      const pnl        = +(p.pnl) || 0;
-      const confPct    = Math.round((+(p.claude_confidence)||0) * 100);
-      const edgePct    = Math.round((+(p.edge)||0) * 100);
+      const pnl = +(p.pnl)||0;
+      const confPct = Math.round((+(p.claude_confidence)||0)*100);
+      const edgePct = Math.round((+(p.edge)||0)*100);
       const priceColor = pnl >= 0 ? 'var(--green)' : 'var(--red)';
-      const gainPct    = p.entry_price ? ((p.current_price - p.entry_price) / p.entry_price * 100).toFixed(1) : '0';
+      const gainPct = p.entry_price ? ((p.current_price - p.entry_price)/p.entry_price*100).toFixed(1) : '0';
       const fetchedStr = p.market_fetched_at ? new Date(p.market_fetched_at).toLocaleTimeString() : '—';
       return `<tr>
         <td><span class="side-badge side-${p.side}">${p.side}</span></td>
@@ -719,10 +614,10 @@ function render(data) {
         <td style="font-size:10px;color:var(--muted)">${fetchedStr}</td>
       </tr>`;
     }).join('');
-    innerWrap.innerHTML = `<table class="pos-table">
+    posWrap.innerHTML = `<table class="pos-table">
       <thead><tr>
         <th>Side</th><th>Market</th><th>Sig</th>
-        <th>Entry</th><th>Now</th><th>P&L</th>
+        <th>Entry</th><th>Now</th><th>P&amp;L</th>
         <th>Hold</th><th>Last Price</th><th>Conf/Edge</th><th>Fetched At</th>
       </tr></thead>
       <tbody>${rows}</tbody>
@@ -734,19 +629,18 @@ function render(data) {
   if (closedTrades.length === 0) {
     closedEl.innerHTML = '<div class="empty">No closed trades yet.</div>';
   } else {
-    closedEl.innerHTML = [...closedTrades].reverse().slice(0, 25).map(t => {
-      const pnl = +(t.pnl) || 0;
+    closedEl.innerHTML = [...closedTrades].reverse().slice(0,25).map(t => {
+      const pnl = +(t.pnl)||0;
       const holdDays = t.timestamp && t.close_time
-        ? ((new Date(t.close_time) - new Date(t.timestamp)) / 86400000).toFixed(1) + 'd'
-        : '—';
+        ? ((new Date(t.close_time) - new Date(t.timestamp))/86400000).toFixed(1)+'d' : '—';
       return `<div class="trade-row">
         <div class="trade-q" title="${t.question}">${t.question}</div>
+        <span class="trade-pnl ${pc(pnl)}">${sign(pnl)}${fmt(pnl)}</span>
         <div class="trade-row-meta">
           <span class="side-badge side-${t.side}">${t.side}</span>
           ${reasonTag(t.reason)}
           <span class="trade-meta">${holdDays}</span>
         </div>
-        <span class="trade-pnl ${pc(pnl)}">${sign(pnl)}${fmt(pnl)}</span>
       </div>`;
     }).join('');
   }
@@ -754,54 +648,43 @@ function render(data) {
   // ── Log ──
   const logEl = el('log-box');
   if (data.log && data.log.length) {
-    logEl.innerHTML = [...data.log].reverse().slice(0, 100).map(l => {
+    logEl.innerHTML = [...data.log].reverse().slice(0,100).map(l => {
       let cls = 'log-line';
-      if (l.includes('CIRCUIT BREAKER'))             cls += ' circuit';
-      else if (l.includes('[OPEN]'))                 cls += ' open';
+      if      (l.includes('CIRCUIT BREAKER'))                      cls += ' circuit';
+      else if (l.includes('[OPEN]'))                               cls += ' open';
       else if (l.includes('[CLOSE') || l.includes('TAKE_PROFIT')) cls += ' close';
-      else if (l.includes('TIMEOUT'))                cls += ' timeout';
-      else if (l.includes('STALE'))                  cls += ' stale';
-      else if (l.includes('[SKIP]') || l.includes('COOL')) cls += ' skip';
-      else if (l.includes('ERROR') || l.includes('FAIL'))  cls += ' error';
+      else if (l.includes('TIMEOUT'))                              cls += ' timeout';
+      else if (l.includes('STALE'))                                cls += ' stale';
+      else if (l.includes('[SKIP]') || l.includes('COOL'))        cls += ' skip';
+      else if (l.includes('ERROR')  || l.includes('FAIL'))        cls += ' error';
       return `<div class="${cls}">${l}</div>`;
     }).join('');
   }
 }
 
-// ── Load data ─────────────────────────────────────────────────────────────────
 async function loadData() {
   try {
     const r = await fetch('paper_trades.json?t=' + Date.now());
     if (!r.ok) throw new Error('not found');
-    const data = await r.json();
-    render(data);
-  } catch (e) {
-    render(getMockData());
-  }
+    render(await r.json());
+  } catch { render(getMockData()); }
 }
 
 function getMockData() {
   const now = new Date();
   return {
-    balance: 1012.40,
-    total_pnl: 8.20,
-    unrealised_pnl: 4.20,
-    combined_pnl: 12.40,
-    scan_count: 3,
-    signals_analyzed: 18,
-    trades_taken: 4,
+    balance: 1012.40, total_pnl: 8.20, unrealised_pnl: 4.20, combined_pnl: 12.40,
+    scan_count: 3, signals_analyzed: 18, trades_taken: 4,
     start_time: new Date(now - 900_000).toISOString(),
     circuit_breaker: false,
-    open_positions: [
-      {
-        market_id: '1', question: 'Will BTC close above $100k before June 2026?',
-        side: 'YES', entry_price: 0.28, current_price: 0.34, pnl: 4.20,
-        claude_confidence: 0.72, edge: 0.09, source: 'llm',
-        timestamp: new Date(now - 7200_000).toISOString(),
-        last_price_update: new Date(now - 90_000).toISOString(),
-        market_fetched_at: new Date(now - 7200_000).toISOString(),
-      },
-    ],
+    open_positions: [{
+      market_id: '1', question: 'Will BTC close above $100k before June 2026?',
+      side: 'YES', entry_price: 0.28, current_price: 0.34, pnl: 4.20,
+      claude_confidence: 0.72, edge: 0.09, source: 'llm',
+      timestamp: new Date(now - 7200_000).toISOString(),
+      last_price_update: new Date(now - 90_000).toISOString(),
+      market_fetched_at: new Date(now - 7200_000).toISOString(),
+    }],
     closed_trades: [
       {
         question: 'Will Fed cut rates in May 2026?', side: 'YES',
@@ -826,18 +709,10 @@ function getMockData() {
   };
 }
 
-// ── Countdown & auto-refresh ──────────────────────────────────────────────────
 let secs = 10;
 loadData();
-setInterval(() => {
-  secs--;
-  el('countdown').textContent = secs;
-  if (secs <= 0) { secs = 10; loadData(); }
-}, 1000);
-
-setInterval(() => {
-  if (_startISO) el('uptime').textContent = uptime(_startISO);
-}, 1000);
+setInterval(() => { el('countdown').textContent = --secs; if (secs<=0){secs=10;loadData();} }, 1000);
+setInterval(() => { if (_startISO) el('uptime').textContent = uptime(_startISO); }, 1000);
 </script>
 </body>
 </html>
