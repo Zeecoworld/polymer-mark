@@ -274,11 +274,19 @@
 
   .empty { padding: 32px 16px; text-align: center; color: var(--muted); font-size: 12px; line-height: 1.6; }
 
-  /* Desktop Scroll Settings */
+  /* Desktop & General Scroll Settings */
   .panel-scroll { overflow-y: auto; overflow-x: auto; -webkit-overflow-scrolling: touch; max-height: 440px; }
-  .panel-scroll::-webkit-scrollbar { width: 3px; height: 3px; }
-  .panel-scroll::-webkit-scrollbar-track { background: transparent; }
-  .panel-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+  
+  .panel-scroll::-webkit-scrollbar { width: 4px; height: 6px; display: block; }
+  .panel-scroll::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.02); border-radius: 99px; }
+  .panel-scroll::-webkit-scrollbar-thumb { background: #3b9eff; border-radius: 99px; }
+
+  .table-scroll { 
+    overflow-x: auto; 
+    -webkit-overflow-scrolling: touch; 
+    width: 100%; 
+    padding-bottom: 8px;
+  }
 
   /* ── RESPONSIVE BREAKPOINTS ── */
 
