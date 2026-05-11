@@ -121,15 +121,11 @@
   .main-grid   { display: grid; grid-template-columns: 1fr 340px; gap: 14px; margin-bottom: 14px; }
   .bottom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 
-  /* ── Panel ──
-     overflow: clip keeps border-radius visual clipping without
-     creating a scroll-blocking stacking context that would eat
-     touch events from child scroll containers on iOS Safari. ── */
   .panel {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 12px;
-    overflow: clip;          /* visual clip only — does NOT block child scroll */
+    overflow: clip;
     min-width: 0;
     display: flex;
     flex-direction: column;
@@ -148,14 +144,7 @@
   .equity-chart-wrapper { position: relative; width: 100%; height: 120px; padding: 10px; }
   canvas { width: 100% !important; height: 100% !important; }
 
-  /* ══════════════════════════════════════════════════════════════
-     POSITIONS TABLE SCROLL
-     Single container handles BOTH axes.
-     overflow-x: scroll   → forces iOS to register the touch handler
-     overflow-y: auto     → vertical scroll when rows exceed max-height
-     -webkit-overflow-scrolling: touch → momentum / inertia on iPhone
-     Sticky thead anchors to THIS element (its direct scroll parent).
-  ══════════════════════════════════════════════════════════════ */
+  /* ── Positions Table Scroll ── */
   .pos-scroll {
     overflow-x: scroll;
     overflow-y: auto;
@@ -175,12 +164,15 @@
     flex-shrink: 0; letter-spacing: 0.3px;
   }
 
+  /* ── Column visibility classes ── */
+  /* col-hide-sm = hidden on ≤600px  */
+  /* col-hide-md = hidden on ≤768px  */
+
   .pos-table {
     border-collapse: separate; border-spacing: 0;
-    min-width: 780px;   /* wider than any phone → forces horizontal overflow */
+    min-width: 780px;
     width: 100%;
   }
-  /* thead sticks to the top of .pos-scroll */
   .pos-table thead { position: sticky; top: 0; z-index: 5; }
   .pos-table th {
     font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase;
@@ -230,11 +222,7 @@
   .log-line.timeout { color: var(--orange); }
   .log-line.circuit { color: var(--red); font-weight: bold; }
 
-  /* ══════════════════════════════════════════════════════════════
-     CLOSED TRADES
-     Uses a grid layout so P&L is always anchored to the right
-     of each row, never pushed off-screen.
-  ══════════════════════════════════════════════════════════════ */
+  /* ── Closed Trades ── */
   .closed-scroll {
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
@@ -254,20 +242,16 @@
     align-items: center;
   }
   .trade-row:last-child { border-bottom: none; }
-
-  /* Question text — left column, top row */
   .trade-q {
     grid-column: 1; grid-row: 1;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     color: var(--text); font-size: 11px;
   }
-  /* P&L — right column, spans both rows → always visible */
   .trade-pnl {
     grid-column: 2; grid-row: 1 / 3;
     font-weight: 700; font-family: var(--sans); font-size: 15px;
     white-space: nowrap; align-self: center; text-align: right;
   }
-  /* Badges row — left column, bottom row */
   .trade-row-meta {
     grid-column: 1; grid-row: 2;
     display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
@@ -285,13 +269,21 @@
 
   .empty { padding: 32px 16px; text-align: center; color: var(--muted); font-size: 12px; line-height: 1.6; }
 
-  /* ── RESPONSIVE ── */
-  @media (max-width: 1024px) {
-    .main-grid   { grid-template-columns: 1fr; }
-    .bottom-grid { grid-template-columns: 1fr; }
-    .log-box { height: 240px; }
+  /* ═══════════════════════════════════════════════════════════
+     RESPONSIVE
+  ═══════════════════════════════════════════════════════════ */
+
+  /* ── 768px: tablet ── */
+  @media (max-width: 768px) {
+    /* Hide: Sig(3), Fetched At(10) */
+    .pos-table .col-sig,
+    .pos-table .col-fetched { display: none; }
+
+    /* Tighter min-width since 2 cols removed */
+    .pos-table { min-width: 620px; }
   }
 
+  /* ── 600px: mobile ── */
   @media (max-width: 600px) {
     .wrapper    { padding: 10px 8px; }
     .brand-name { font-size: 15px; }
@@ -307,12 +299,45 @@
     .panel-header { padding: 10px 12px; }
     .panel-title  { font-size: 12px; }
     .config-body  { padding: 12px; font-size: 10px; line-height: 2.1; }
+
+    /* Hide on mobile: Sig(3), Hold(7), Last Price(8), Conf/Edge(9), Fetched At(10)
+       Keep: Side(1), Market(2), Entry(4), Now(5), P&L(6) */
+    .pos-table .col-sig,
+    .pos-table .col-hold,
+    .pos-table .col-last,
+    .pos-table .col-conf,
+    .pos-table .col-fetched { display: none; }
+
+    /* 5 lean columns fit in ~380px — no awkward partial-column bleed */
+    .pos-table { min-width: 380px; }
+
+    /* Slightly wider market column on mobile */
+    .pos-table .col-market .q-text { max-width: 140px; }
+
+    /* Compact cell padding */
+    .pos-table th,
+    .pos-table td { padding: 8px 10px; }
+
+    /* Tighter P&L column */
+    .pos-table .col-pnl { font-size: 11px; }
   }
 
+  /* ── 380px: tiny phones ── */
   @media (max-width: 380px) {
     header        { flex-direction: column; align-items: flex-start; gap: 10px; }
     .header-right { width: 100%; justify-content: flex-start; }
     .stats-grid   { grid-template-columns: 1fr; }
+
+    /* At 380px hide Entry too; show Side / Market / Now / P&L */
+    .pos-table .col-entry { display: none; }
+    .pos-table { min-width: 300px; }
+    .pos-table .col-market .q-text { max-width: 110px; }
+  }
+
+  @media (max-width: 1024px) {
+    .main-grid   { grid-template-columns: 1fr; }
+    .bottom-grid { grid-template-columns: 1fr; }
+    .log-box { height: 240px; }
   }
 </style>
 </head>
@@ -390,12 +415,7 @@
         <span class="panel-title">Open Positions</span>
         <span class="panel-badge" id="open-count-badge">0 active</span>
       </div>
-      <div class="swipe-hint">← swipe left/right to see all columns →</div>
-      <!--
-        Single container: overflow-x:scroll + overflow-y:auto
-        This is the scroll parent for sticky thead.
-        Works reliably on iPhone 11 / iOS 13+.
-      -->
+      <div class="swipe-hint">← swipe to see all columns →</div>
       <div class="pos-scroll" id="positions-wrap">
         <div class="empty">No open positions yet.<br>Bot is scanning markets…</div>
       </div>
@@ -585,6 +605,8 @@ function render(data) {
   }
 
   // ── Open Positions ──
+  // Columns: Side(1) Market(2) Sig(3) Entry(4) Now(5) P&L(6) Hold(7) LastPrice(8) Conf(9) FetchedAt(10)
+  // CSS hides cols by class name at each breakpoint — no JS logic needed.
   const posWrap = el('positions-wrap');
   if (openPos.length === 0) {
     posWrap.innerHTML = '<div class="empty">No open positions yet.<br>Bot is scanning markets…</div>';
@@ -597,28 +619,36 @@ function render(data) {
       const gainPct = p.entry_price ? ((p.current_price - p.entry_price)/p.entry_price*100).toFixed(1) : '0';
       const fetchedStr = p.market_fetched_at ? new Date(p.market_fetched_at).toLocaleTimeString() : '—';
       return `<tr>
-        <td><span class="side-badge side-${p.side}">${p.side}</span></td>
-        <td><span class="q-text" title="${p.question}">${p.question}</span></td>
-        <td>${srcPill(p.source)}</td>
-        <td style="font-family:var(--mono)">${(+(p.entry_price)||0).toFixed(3)}</td>
-        <td style="font-family:var(--mono);color:${priceColor}">${(+(p.current_price||p.entry_price)||0).toFixed(3)}</td>
-        <td class="${pc(pnl)}" style="font-weight:700">${sign(pnl)}${fmt(pnl)} <span style="font-size:10px;opacity:.6">${gainPct}%</span></td>
-        <td>${holdDaysStr(p.timestamp)}</td>
-        <td>${stalePriceStr(p.last_price_update)}</td>
-        <td>
+        <td class="col-side"><span class="side-badge side-${p.side}">${p.side}</span></td>
+        <td class="col-market"><span class="q-text" title="${p.question}">${p.question}</span></td>
+        <td class="col-sig">${srcPill(p.source)}</td>
+        <td class="col-entry" style="font-family:var(--mono)">${(+(p.entry_price)||0).toFixed(3)}</td>
+        <td class="col-now" style="font-family:var(--mono);color:${priceColor}">${(+(p.current_price||p.entry_price)||0).toFixed(3)}</td>
+        <td class="col-pnl ${pc(pnl)}" style="font-weight:700">${sign(pnl)}${fmt(pnl)} <span style="font-size:10px;opacity:.6">${gainPct}%</span></td>
+        <td class="col-hold">${holdDaysStr(p.timestamp)}</td>
+        <td class="col-last">${stalePriceStr(p.last_price_update)}</td>
+        <td class="col-conf">
           <div style="min-width:80px">
             <div class="progress-bar"><div class="progress-fill" style="width:${confPct}%;background:${priceColor}"></div></div>
             <div style="font-size:10px;color:var(--muted);margin-top:2px">${confPct}% / ${edgePct}% edge</div>
           </div>
         </td>
-        <td style="font-size:10px;color:var(--muted)">${fetchedStr}</td>
+        <td class="col-fetched" style="font-size:10px;color:var(--muted)">${fetchedStr}</td>
       </tr>`;
     }).join('');
+
     posWrap.innerHTML = `<table class="pos-table">
       <thead><tr>
-        <th>Side</th><th>Market</th><th>Sig</th>
-        <th>Entry</th><th>Now</th><th>P&amp;L</th>
-        <th>Hold</th><th>Last Price</th><th>Conf/Edge</th><th>Fetched At</th>
+        <th class="col-side">Side</th>
+        <th class="col-market">Market</th>
+        <th class="col-sig">Sig</th>
+        <th class="col-entry">Entry</th>
+        <th class="col-now">Now</th>
+        <th class="col-pnl">P&amp;L</th>
+        <th class="col-hold">Hold</th>
+        <th class="col-last">Last Price</th>
+        <th class="col-conf">Conf/Edge</th>
+        <th class="col-fetched">Fetched At</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
